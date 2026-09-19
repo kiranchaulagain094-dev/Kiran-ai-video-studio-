@@ -82,6 +82,11 @@ export interface Project {
   thumbnailUrl?: string;
   scenes?: VideoScene[];
   script?: string;
+  description?: string;
+  videoUrl?: string;
+  tags?: string[];
+  scenesCount?: number;
+  quality?: string;
   exportedResolution?: '720p' | '1080p' | '4K';
   exportedUrl?: string;
 }
@@ -221,7 +226,7 @@ export interface AdminAISettings {
   videoGenerationProvider: 'Veo (Google)' | 'Runway Gen-3' | 'Luma Dream Machine' | 'Sora' | 'Mock Modular';
   imageGenerationProvider: 'Imagen 3' | 'Midjourney' | 'DALL-E 3' | 'Flux';
   voiceProvider: 'Google Cloud TTS' | 'ElevenLabs' | 'OpenAI TTS';
-  storageProvider: 'Google Cloud Storage' | 'AWS S3' | 'Firebase Storage';
+  storageProvider: 'Google Cloud Storage' | 'AWS S3' | 'Cloud Storage';
   apiKeyConfigured: boolean;
 }
 

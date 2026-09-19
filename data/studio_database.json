@@ -1,0 +1,77 @@
+{
+  "users": [
+    {
+      "id": "usr_ebd0dc6535e042e3907104bf82643a97",
+      "username": "creator_alpha_1789826754974",
+      "displayUsername": "creator_alpha_1789826754974",
+      "passwordHash": "$2b$12$PY5Q/wOJ.E0sR4s.gxgc1u7BcwLxCY85Ssa0BKbMtnleoPqgbMTCm",
+      "role": "admin",
+      "createdAt": "2026-09-19T14:05:54.975Z",
+      "avatar": "https://ui-avatars.com/api/?name=creator_alpha_1789826754974&background=6366f1&color=fff",
+      "status": "active"
+    },
+    {
+      "id": "usr_b98d6063fe3e4ee69f99f40da2704601",
+      "username": "creator_beta_1789826754974",
+      "displayUsername": "creator_beta_1789826754974",
+      "passwordHash": "$2b$12$PY5Q/wOJ.E0sR4s.gxgc1u7BcwLxCY85Ssa0BKbMtnleoPqgbMTCm",
+      "role": "user",
+      "createdAt": "2026-09-19T14:05:54.977Z",
+      "avatar": "https://ui-avatars.com/api/?name=creator_beta_1789826754974&background=6366f1&color=fff",
+      "status": "active"
+    },
+    {
+      "id": "usr_db981874b7a440cf91e69c74cfacd083",
+      "username": "creator_a_1789827975358",
+      "displayUsername": "creator_a_1789827975358",
+      "passwordHash": "$2b$12$E9cmCJ09Nxgsl4.Xv9ac/O31o4zCVKZn.237QWRX88IemZss6qwJe",
+      "role": "user",
+      "createdAt": "2026-09-19T14:26:15.925Z",
+      "avatar": "https://ui-avatars.com/api/?name=creator_a_1789827975358&background=6366f1&color=fff",
+      "status": "active"
+    },
+    {
+      "id": "usr_c53ea5e014784dd4840dfad2846c1ef2",
+      "username": "creator_a_1789827986991",
+      "displayUsername": "creator_a_1789827986991",
+      "passwordHash": "$2b$12$tGTDJGlnZicUV9aEwHf8nOTctkQRt8zdVPIaABbHIdxIk/WT3SLKa",
+      "role": "user",
+      "createdAt": "2026-09-19T14:26:27.501Z",
+      "avatar": "https://ui-avatars.com/api/?name=creator_a_1789827986991&background=6366f1&color=fff",
+      "status": "active"
+    },
+    {
+      "id": "usr_980d7e7005f24f018d324eb87c855a68",
+      "username": "creator_b_1789827986991",
+      "displayUsername": "creator_b_1789827986991",
+      "passwordHash": "$2b$12$xMwi8LjpAEf1faEvG1JiDu3CKJcpn/.SflOB2OlTURQTCQMzbWcX.",
+      "role": "user",
+      "createdAt": "2026-09-19T14:26:28.748Z",
+      "avatar": "https://ui-avatars.com/api/?name=creator_b_1789827986991&background=6366f1&color=fff",
+      "status": "active"
+    }
+  ],
+  "projects": [
+    {
+      "id": "proj_1789827988335_4520d0",
+      "userId": "usr_c53ea5e014784dd4840dfad2846c1ef2",
+      "title": "User A Top Secret Masterpiece",
+      "description": "Classified video project",
+      "type": "YouTube Video",
+      "aspectRatio": "16:9",
+      "duration": "60 seconds",
+      "status": "draft",
+      "thumbnailUrl": "https://images.unsplash.com/photo-1544735716-392fe2489ffa?w=800&auto=format&fit=crop&q=80",
+      "videoUrl": "",
+      "createdAt": "2026-09-19T14:26:28.336Z",
+      "updatedAt": "2026-09-19T14:26:28.336Z",
+      "tags": [
+        "AI Video"
+      ],
+      "scenesCount": 3,
+      "quality": "1080p Full HD",
+      "script": "",
+      "scenes": []
+    }
+  ]
+}

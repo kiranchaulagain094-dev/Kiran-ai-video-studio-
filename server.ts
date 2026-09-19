@@ -1,32 +1,19 @@
 import express from 'express';
 import path from 'path';
-import { VideoGenerationService } from './src/services/videoGeneration';
-
 import dotenv from 'dotenv';
+import cookieParser from 'cookie-parser';
+dotenv.config();
+
+import { VideoGenerationService } from './src/services/videoGeneration';
 import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
-import { initializeApp as initAdminApp, getApps as getAdminApps } from 'firebase-admin/app';
-import { getAuth as getAdminAuth } from 'firebase-admin/auth';
-
-// Initialize Firebase Admin
-let adminAuth: ReturnType<typeof getAdminAuth> | null = null;
-try {
-  if (!getAdminApps().length) {
-    initAdminApp({
-      projectId: 'impressive-cell-3f38q',
-    });
-  }
-  adminAuth = getAdminAuth();
-} catch (e) {
-  console.error('Firebase admin initialization error', e);
-}
-
-
-dotenv.config();
+import { DatabaseService } from './server/db';
+import { AuthService, requireAuth, requireAdmin, AuthenticatedRequest } from './server/auth';
 
 const app = express();
 const PORT = 3000;
 
+app.use(cookieParser());
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
@@ -605,61 +592,312 @@ Respond ONLY with valid JSON in this exact structure without markdown backticks:
 });
 
 
-// --- Admin API Routes with Authentication ---
+// ==========================================
+// --- Custom Authentication Endpoints ---
+// ==========================================
 
-const ADMIN_EMAILS = ['kiranchaulagain34@gmail.com', 'kiranchaulagain094@gmail.com'];
-
-// Middleware to verify Firebase ID token and Admin claim/email
-const verifyAdmin = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized: No token provided' });
-  }
-
-  const token = authHeader.split('Bearer ')[1];
+// 1. User Registration: Requires ONLY username and password
+app.post('/api/auth/register', async (req, res) => {
   try {
-    if (!adminAuth) {
-      return res.status(500).json({ error: 'Firebase Admin not initialized' });
-    }
-    const decodedToken = await adminAuth.verifyIdToken(token);
-    
-    // The owner emails get automatic admin rights.
-    if (ADMIN_EMAILS.includes(decodedToken.email || '')) {
-      try {
-        if (decodedToken.admin !== true) {
-          await adminAuth.setCustomUserClaims(decodedToken.uid, { admin: true });
-        }
-      } catch (claimErr) {
-        console.warn('Could not set custom claim:', claimErr);
-      }
-      (req as any).user = decodedToken;
-      return next();
-    }
-    
-    // Otherwise check for admin claim
-    if (decodedToken.admin === true) {
-      (req as any).user = decodedToken;
-      return next();
-    }
-    
-    return res.status(403).json({ error: 'Forbidden: Admin access required' });
-  } catch (error) {
-    console.error('Auth verification failed:', error);
-    return res.status(401).json({ error: 'Unauthorized: Invalid token' });
-  }
-};
+    const { username, password } = req.body;
 
-// Admin dashboard summary endpoint
-app.get('/api/admin/dashboard', verifyAdmin, async (req, res) => {
-  // Normally fetch real stats from Firestore here
-  res.json({
-    stats: {
-      totalUsers: 1420,
-      activeProjects: 384,
-      aiUsageTokens: 4200000,
-      videosGenerated: 890
+    // Strict input validation
+    if (!username || typeof username !== 'string') {
+      return res.status(400).json({ error: 'Username is required.' });
+    }
+
+    const trimmedUsername = username.trim();
+    if (trimmedUsername.length < 3 || trimmedUsername.length > 30) {
+      return res.status(400).json({ error: 'Username must be between 3 and 30 characters.' });
+    }
+
+    // Alphanumeric + underscores only
+    if (!/^[a-zA-Z0-9_]+$/.test(trimmedUsername)) {
+      return res.status(400).json({ error: 'Username can only contain letters, numbers, and underscores.' });
+    }
+
+    if (!password || typeof password !== 'string') {
+      return res.status(400).json({ error: 'Password is required.' });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
+    }
+
+    if (password.length > 128) {
+      return res.status(400).json({ error: 'Password cannot exceed 128 characters.' });
+    }
+
+    // Check username uniqueness (case-insensitive)
+    const existing = await DatabaseService.findUserByUsername(trimmedUsername);
+    if (existing) {
+      return res.status(409).json({ error: 'Username is already taken. Please choose another.' });
+    }
+
+    // Secure password hashing with bcrypt - never store plaintext
+    const passwordHash = await AuthService.hashPassword(password);
+
+    // Create user with unique immutable user ID
+    const newUser = await DatabaseService.createUser({
+      username: trimmedUsername,
+      displayUsername: trimmedUsername,
+      passwordHash,
+      role: 'user'
+    });
+
+    // Generate secure session token
+    const token = AuthService.createToken(newUser);
+
+    // Record session in user_sessions table when PostgreSQL is configured
+    const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
+    const userAgent = req.headers['user-agent'] as string || '';
+    await DatabaseService.registerSession(newUser.id, token, clientIp, userAgent);
+
+    // Set secure HttpOnly cookie
+    AuthService.setSessionCookie(res, token);
+
+    return res.status(201).json({
+      success: true,
+      token,
+      user: {
+        id: newUser.id,
+        username: newUser.displayUsername,
+        role: newUser.role,
+        createdAt: newUser.createdAt,
+        avatar: newUser.avatar
+      }
+    });
+  } catch (err: any) {
+    console.error('Registration error:', err);
+    return res.status(500).json({ error: err.message || 'Registration failed. Please try again.' });
+  }
+});
+
+// 2. User Login: Username and Password with Rate Limiting & Generic Errors
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password || typeof username !== 'string' || typeof password !== 'string') {
+      return res.status(400).json({ error: 'Username and password are required.' });
+    }
+
+    const trimmedUsername = username.trim();
+    const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
+    const rateLimitKey = `${clientIp}:${trimmedUsername.toLowerCase()}`;
+
+    // Check rate limit: 5 failed attempts within 15 minutes
+    const rateCheck = DatabaseService.checkRateLimit(rateLimitKey);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({
+        error: `Too many failed login attempts. Please try again in ${rateCheck.remainingMinutes || 15} minutes.`
+      });
+    }
+
+    // Lookup user by normalized username from PostgreSQL / storage
+    const user = await DatabaseService.findUserByUsername(trimmedUsername);
+
+    // If user not found, perform dummy hash comparison to prevent timing attacks
+    if (!user) {
+      DatabaseService.recordFailedAttempt(rateLimitKey);
+      await AuthService.verifyPassword('dummy_password_timing', '$2a$12$e8Y/3O8m1a6ZJkRkQz3ywe0NnCqvK2uYw4p6vL6Kk6w4w4w4w4w4e');
+      return res.status(401).json({ error: 'Invalid username or password.' });
+    }
+
+    // Verify bcrypt password hash
+    const isValid = await AuthService.verifyPassword(password, user.passwordHash);
+    if (!isValid) {
+      DatabaseService.recordFailedAttempt(rateLimitKey);
+      return res.status(401).json({ error: 'Invalid username or password.' });
+    }
+
+    // Check if account is suspended
+    if (user.status === 'suspended') {
+      return res.status(403).json({ error: 'Your account has been suspended. Please contact administrator.' });
+    }
+
+    // Reset rate limit on successful authentication
+    DatabaseService.resetRateLimit(rateLimitKey);
+
+    // Create session token and set HttpOnly cookie
+    const token = AuthService.createToken(user);
+    AuthService.setSessionCookie(res, token);
+
+    // Record session in database
+    const userAgent = req.headers['user-agent'] as string || '';
+    await DatabaseService.registerSession(user.id, token, clientIp, userAgent);
+
+    return res.json({
+      success: true,
+      token,
+      user: {
+        id: user.id,
+        username: user.displayUsername,
+        role: user.role,
+        createdAt: user.createdAt,
+        avatar: user.avatar
+      }
+    });
+  } catch (err: any) {
+    console.error('Login error:', err);
+    return res.status(500).json({ error: 'Login failed. Please try again.' });
+  }
+});
+
+// 3. User Logout: Clears session cookie and deletes session record
+app.post('/api/auth/logout', async (req, res) => {
+  const token = AuthService.extractToken(req);
+  if (token) {
+    await DatabaseService.deleteSession(token);
+  }
+  AuthService.clearSessionCookie(res);
+  res.json({ success: true, message: 'Logged out successfully.' });
+});
+
+// 4. Session Verification Endpoint
+app.get('/api/auth/me', async (req, res) => {
+  const token = AuthService.extractToken(req);
+  if (!token) {
+    return res.status(401).json({ authenticated: false, error: 'No active session.' });
+  }
+
+  const decoded = AuthService.verifyToken(token);
+  if (!decoded || !decoded.sub) {
+    return res.status(401).json({ authenticated: false, error: 'Session expired or invalid.' });
+  }
+
+  const user = await DatabaseService.findUserById(decoded.sub);
+  if (!user || user.status === 'suspended') {
+    return res.status(401).json({ authenticated: false, error: 'User account not available.' });
+  }
+
+  return res.json({
+    authenticated: true,
+    user: {
+      id: user.id,
+      username: user.displayUsername,
+      role: user.role,
+      createdAt: user.createdAt,
+      avatar: user.avatar
     }
   });
+});
+
+// ==========================================
+// --- User-Isolated Projects API Routes ---
+// ==========================================
+
+// Get all projects for the currently authenticated user
+app.get('/api/projects', requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const isAdmin = req.user?.role === 'admin';
+    const projects = await DatabaseService.getProjectsForUser(req.userId!, isAdmin);
+    res.json({ projects });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch projects.' });
+  }
+});
+
+// Create a new project strictly bound to authenticated req.userId
+app.post('/api/projects', requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const newProject = await DatabaseService.createProject(req.userId!, req.body);
+    res.status(201).json({ project: newProject });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Failed to create project.' });
+  }
+});
+
+// Update a project (Ownership verification enforced)
+app.put('/api/projects/:id', requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const isAdmin = req.user?.role === 'admin';
+    const updated = await DatabaseService.updateProject(req.params.id, req.userId!, req.body, isAdmin);
+    res.json({ project: updated });
+  } catch (err: any) {
+    if (err.message.includes('not found')) {
+      return res.status(404).json({ error: err.message });
+    }
+    if (err.message.includes('Unauthorized')) {
+      return res.status(403).json({ error: err.message });
+    }
+    res.status(400).json({ error: err.message || 'Failed to update project.' });
+  }
+});
+
+// Delete a project (Ownership verification enforced)
+app.delete('/api/projects/:id', requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const isAdmin = req.user?.role === 'admin';
+    await DatabaseService.deleteProject(req.params.id, req.userId!, isAdmin);
+    res.json({ success: true, id: req.params.id });
+  } catch (err: any) {
+    if (err.message.includes('not found')) {
+      return res.status(404).json({ error: err.message });
+    }
+    if (err.message.includes('Unauthorized')) {
+      return res.status(403).json({ error: err.message });
+    }
+    res.status(400).json({ error: err.message || 'Failed to delete project.' });
+  }
+});
+
+// Duplicate a project (Creates clone owned by current authenticated user)
+app.post('/api/projects/:id/duplicate', requireAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const original = await DatabaseService.getProjectById(req.params.id);
+    if (!original) {
+      return res.status(404).json({ error: 'Project not found.' });
+    }
+    const isAdmin = req.user?.role === 'admin';
+    if (original.userId !== req.userId && !isAdmin) {
+      return res.status(403).json({ error: 'Unauthorized to duplicate this project.' });
+    }
+
+    const duplicated = await DatabaseService.createProject(req.userId!, {
+      ...original,
+      title: `${original.title} (Copy)`
+    });
+
+    res.status(201).json({ project: duplicated });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Failed to duplicate project.' });
+  }
+});
+
+// ==========================================
+// --- Admin API Routes with Custom Auth ---
+// ==========================================
+
+app.get('/api/admin/dashboard', requireAdmin, async (req: AuthenticatedRequest, res) => {
+  const allUsers = await DatabaseService.getAllUsers();
+  const allProjects = await DatabaseService.getProjectsForUser('', true);
+
+  res.json({
+    stats: {
+      totalUsers: allUsers.length,
+      activeProjects: allProjects.length,
+      aiUsageTokens: 4200000,
+      videosGenerated: allProjects.filter(p => p.status === 'ready' || p.status === 'completed').length
+    }
+  });
+});
+
+app.get('/api/admin/users', requireAdmin, async (req: AuthenticatedRequest, res) => {
+  const users = await DatabaseService.getAllUsers();
+  res.json({ users });
+});
+
+app.patch('/api/admin/users/:id/status', requireAdmin, async (req: AuthenticatedRequest, res) => {
+  const { status } = req.body;
+  if (status !== 'active' && status !== 'suspended') {
+    return res.status(400).json({ error: 'Invalid status.' });
+  }
+  const success = await DatabaseService.updateUserStatus(req.params.id, status);
+  if (!success) {
+    return res.status(404).json({ error: 'User not found.' });
+  }
+  res.json({ success: true, id: req.params.id, status });
 });
 
 // Official Admin YouTube Channel State & Endpoints
@@ -673,7 +911,7 @@ let currentAdminChannel = {
   avatarUrl: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&auto=format&fit=crop&q=80',
   bannerUrl: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=1200&auto=format&fit=crop&q=80',
   verifiedAdmin: true,
-  connectedEmail: 'kiranchaulagain094@gmail.com',
+  connectedEmail: 'admin@kiranstudio.ai',
   connectedAt: '2026-09-18T09:25:00Z',
   category: 'AI Music & Video Productions',
   subscribersCount: 'Verified Creator',
@@ -690,7 +928,7 @@ app.get('/api/admin/youtube-channel', (req, res) => {
   res.json({ channel: currentAdminChannel });
 });
 
-app.post('/api/admin/youtube-channel', (req, res) => {
+app.post('/api/admin/youtube-channel', requireAdmin, (req: AuthenticatedRequest, res) => {
   const { url } = req.body;
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ error: 'Valid YouTube channel URL is required' });
@@ -723,42 +961,6 @@ app.post('/api/admin/youtube-channel', (req, res) => {
   res.json({ channel: currentAdminChannel, success: true });
 });
 
-
-
-// Initialize session and claims
-app.post('/api/auth/verify', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
-  const token = authHeader.split('Bearer ')[1];
-  try {
-    if (!adminAuth) {
-      return res.status(500).json({ error: 'Firebase Admin not initialized' });
-    }
-    const decodedToken = await adminAuth.verifyIdToken(token);
-    
-    // Assign owner admin rights securely on the server
-    if (ADMIN_EMAILS.includes(decodedToken.email || '')) {
-      let adminAssigned = false;
-      try {
-        if (decodedToken.admin !== true) {
-          await adminAuth.setCustomUserClaims(decodedToken.uid, { admin: true });
-          adminAssigned = true;
-        }
-      } catch (claimErr) {
-        console.warn('Could not set custom claim:', claimErr);
-      }
-      return res.json({ adminAssigned, isAdmin: true });
-    }
-    
-    return res.json({ adminAssigned: false, isAdmin: decodedToken.admin === true });
-  } catch (error) {
-    return res.status(401).json({ error: 'Invalid token' });
-  }
-});
-
 // Vite Middleware Setup for Dev & Production
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
@@ -780,4 +982,11 @@ async function startServer() {
   });
 }
 
-startServer();
+// Auto-start server in standalone Node or Cloud Run container
+if (process.env.VERCEL !== '1' && process.env.NODE_ENV !== 'test') {
+  startServer();
+}
+
+export { app, startServer };
+export default app;
+

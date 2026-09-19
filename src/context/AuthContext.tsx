@@ -1,96 +1,126 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { User, onAuthStateChanged } from 'firebase/auth';
-import { 
-  auth, 
-  db, 
-  signInWithGoogle as firebaseSignInWithGoogle, 
-  logout as firebaseLogout, 
-  checkRedirectResult, 
-  syncUserRecord 
-} from '../lib/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { AuthApiClient, SafeUser } from '../lib/authClient';
 
 interface AuthContextType {
-  currentUser: User | null;
+  currentUser: SafeUser | null;
   isAdmin: boolean;
   isLoading: boolean;
-  signInWithGoogle: () => Promise<User | null>;
+  authError: string | null;
+  clearAuthError: () => void;
+  login: (username: string, password: string) => Promise<SafeUser>;
+  register: (username: string, password: string) => Promise<SafeUser>;
   signOut: () => Promise<void>;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
   currentUser: null,
   isAdmin: false,
   isLoading: true,
-  signInWithGoogle: async () => null,
+  authError: null,
+  clearAuthError: () => {},
+  login: async () => { throw new Error('AuthContext not initialized'); },
+  register: async () => { throw new Error('AuthContext not initialized'); },
   signOut: async () => {},
+  logout: async () => {},
 });
 
 export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<SafeUser | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
 
+  // Initialize session on mount using HttpOnly cookie or in-memory session token
   useEffect(() => {
-    // Check if returning from redirect sign-in
-    checkRedirectResult().catch((e) => {
-      console.warn('Redirect sign-in check notice:', e);
-    });
+    let isMounted = true;
 
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setCurrentUser(user);
-      
-      if (user) {
-        const isOwnerEmail = 
-          user.email === 'kiranchaulagain34@gmail.com' || 
-          user.email === 'kiranchaulagain094@gmail.com';
-
-        try {
-          // Sync record in Firestore and backend
-          await syncUserRecord(user);
-
-          // Check custom claims
-          const tokenResult = await user.getIdTokenResult(true);
-          if (tokenResult.claims.admin === true || isOwnerEmail) {
-            setIsAdmin(true);
+    async function loadSession() {
+      try {
+        const user = await AuthApiClient.getSession();
+        if (isMounted) {
+          if (user) {
+            setCurrentUser(user);
+            setIsAdmin(user.role === 'admin');
           } else {
-            // Fallback to checking admins collection
-            const adminDoc = await getDoc(doc(db, 'admins', user.uid));
-            setIsAdmin(adminDoc.exists());
+            setCurrentUser(null);
+            setIsAdmin(false);
           }
-        } catch (e) {
-          console.error('Failed to verify admin status', e);
-          setIsAdmin(isOwnerEmail);
         }
-      } else {
-        setIsAdmin(false);
+      } catch (err: any) {
+        if (isMounted) {
+          setCurrentUser(null);
+          setIsAdmin(false);
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
+        }
       }
-      
-      setIsLoading(false);
-    });
+    }
 
-    return () => unsubscribe();
+    loadSession();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  const handleSignInWithGoogle = async () => {
-    return await firebaseSignInWithGoogle();
+  const handleLogin = async (username: string, password: string): Promise<SafeUser> => {
+    setAuthError(null);
+    try {
+      const user = await AuthApiClient.login(username, password);
+      setCurrentUser(user);
+      setIsAdmin(user.role === 'admin');
+      return user;
+    } catch (err: any) {
+      const msg = err.message || 'Login failed. Please check your credentials.';
+      setAuthError(msg);
+      throw err;
+    }
+  };
+
+  const handleRegister = async (username: string, password: string): Promise<SafeUser> => {
+    setAuthError(null);
+    try {
+      const user = await AuthApiClient.register(username, password);
+      setCurrentUser(user);
+      setIsAdmin(user.role === 'admin');
+      return user;
+    } catch (err: any) {
+      const msg = err.message || 'Registration failed.';
+      setAuthError(msg);
+      throw err;
+    }
   };
 
   const handleSignOut = async () => {
-    await firebaseLogout();
-    setCurrentUser(null);
-    setIsAdmin(false);
+    try {
+      await AuthApiClient.logout();
+    } catch (err) {
+      console.error('Logout error:', err);
+    } finally {
+      setCurrentUser(null);
+      setIsAdmin(false);
+      setAuthError(null);
+    }
   };
 
+  const clearAuthError = () => setAuthError(null);
+
   return (
-    <AuthContext.Provider value={{ 
-      currentUser, 
-      isAdmin, 
+    <AuthContext.Provider value={{
+      currentUser,
+      isAdmin,
       isLoading,
-      signInWithGoogle: handleSignInWithGoogle,
-      signOut: handleSignOut
+      authError,
+      clearAuthError,
+      login: handleLogin,
+      register: handleRegister,
+      signOut: handleSignOut,
+      logout: handleSignOut,
     }}>
       {children}
     </AuthContext.Provider>

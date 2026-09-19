@@ -19,7 +19,6 @@ import { MusicVideoPlanner } from './components/music/MusicVideoPlanner';
 import { VideoGenerationComingSoon } from './components/generator/VideoGenerationComingSoon';
 import { Project, UserProfile, Announcement, User } from './types';
 import { useAuth } from './context/AuthContext';
-import { logout } from './lib/firebase';
 import { StudioApiService } from './services/api';
 import { ShieldAlert, AlertTriangle, DownloadCloud, Settings as SettingsIcon, ShieldCheck, CheckCircle2, HardDrive, Sparkles, Film, Sliders, ExternalLink, Music } from 'lucide-react';
 
@@ -49,7 +48,7 @@ const routeToPath = (route: string): string => {
 
 export default function App() {
   // Authentication Context
-  const { currentUser: fbUser, isAdmin, isLoading } = useAuth();
+  const { currentUser: sessionUser, isAdmin, isLoading, signOut } = useAuth();
 
   // Navigation & UI state with persistent SPA URL support
   const [currentRoute, setCurrentRoute] = useState<string>(() => {
@@ -95,20 +94,22 @@ export default function App() {
   const [announcements, setAnnouncements] = useState<Announcement[]>(StudioApiService.getAnnouncements());
   const [currentEditingProject, setCurrentEditingProject] = useState<Project | null>(null);
 
-  // Keep Firebase user synced with studio profile state
+  // Synchronize authenticated user profile and fetch user-isolated projects
   useEffect(() => {
-    if (fbUser) {
-      const userProjectsCount = projects.filter(p => p.userId === fbUser.uid).length;
+    if (sessionUser) {
+      StudioApiService.fetchProjectsFromServer().then(freshProjects => {
+        setProjects(freshProjects);
+      });
       setCurrentUser({
-        id: fbUser.uid,
-        name: fbUser.displayName || fbUser.email?.split('@')[0] || 'Studio Creator',
-        email: fbUser.email || '',
-        avatar: fbUser.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(fbUser.displayName || fbUser.email || 'Creator')}&background=6366f1&color=fff`,
+        id: sessionUser.id,
+        name: sessionUser.username,
+        email: `${sessionUser.username}@studio.local`,
+        avatar: sessionUser.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(sessionUser.username)}&background=6366f1&color=fff`,
         role: isAdmin ? 'Admin' : 'User',
         plan: 'Pro',
         status: 'active',
-        createdAt: fbUser.metadata.creationTime || new Date().toISOString(),
-        projectsCount: userProjectsCount,
+        createdAt: sessionUser.createdAt || new Date().toISOString(),
+        projectsCount: projects.filter(p => p.userId === sessionUser.id).length,
         generationsCount: 48,
         storageUsedMB: 1240
       });
@@ -123,13 +124,14 @@ export default function App() {
       }
     } else {
       setCurrentUser(null);
+      setProjects([]);
     }
-  }, [fbUser, isAdmin, projects]);
+  }, [sessionUser, isAdmin]);
 
-  // User-isolated projects: Admins see all, standard creators see ONLY projects matching their Firebase UID
+  // User-isolated projects: Admins see all, standard creators see ONLY projects matching their immutable user ID
   const userProjects = (isAdmin || currentUser?.role === 'Admin')
     ? projects
-    : projects.filter(p => p.userId === fbUser?.uid);
+    : projects.filter(p => p.userId === sessionUser?.id);
 
   // Cross-component prompt passing
   const [initialGeneratorPrompt, setInitialGeneratorPrompt] = useState<string>('');
@@ -146,7 +148,7 @@ export default function App() {
   const [preferencesSaved, setPreferencesSaved] = useState(false);
 
   const refreshProjects = () => {
-    setProjects(StudioApiService.getProjects());
+    StudioApiService.fetchProjectsFromServer().then(setProjects);
   };
 
   const refreshAnnouncements = () => {
@@ -165,11 +167,16 @@ export default function App() {
 
   const handleLogout = async () => {
     try {
-      await logout();
+      await signOut();
     } catch (err) {
       console.error('Logout error', err);
     }
     setCurrentUser(null);
+    setProjects([]);
+    try {
+      localStorage.removeItem('kiran_studio_projects');
+      localStorage.removeItem('kiran_studio_current_user');
+    } catch {}
     navigateTo('login');
   };
 
@@ -209,14 +216,14 @@ export default function App() {
   };
 
   // MANDATORY AUTHENTICATION GUARDS
-  // 1. If Firebase auth session is loading, show clean loading screen
+  // 1. If auth session is loading, show clean loading screen
   if (isLoading) {
     return <AuthLoadingScreen />;
   }
 
-  // 2. If user is NOT signed in with Google, render full-screen Welcome/Login page only
-  // Absolutely no access to dashboard or protected features without Google sign-in
-  if (!fbUser) {
+  // 2. If user is NOT signed in, render full-screen Welcome/Login page only
+  // Absolutely no access to dashboard or protected features without custom sign-in
+  if (!sessionUser) {
     return (
       <WelcomeLoginPage 
         onLoginSuccess={handleLoginSuccess}
@@ -281,7 +288,7 @@ export default function App() {
                 if (!currentUser) setIsAuthModalOpen(true);
                 else navigateTo('video-generator');
               }}
-              onContinueWithGoogle={() => setIsAuthModalOpen(true)}
+              onOpenLogin={() => setIsAuthModalOpen(true)}
               onSelectFeature={(featureRoute) => {
                 navigateTo(featureRoute);
               }}
@@ -306,13 +313,13 @@ export default function App() {
             <VideoGenerator
               initialTemplatePrompt={initialGeneratorPrompt}
               onProjectCreated={(newProject) => {
-                const userProj = { ...newProject, userId: fbUser.uid };
+                const userProj = { ...newProject, userId: sessionUser.id };
                 StudioApiService.saveProject(userProj);
                 refreshProjects();
                 setCurrentEditingProject(userProj);
               }}
               onOpenEditor={(project) => {
-                const userProj = { ...project, userId: fbUser.uid };
+                const userProj = { ...project, userId: sessionUser.id };
                 StudioApiService.saveProject(userProj);
                 refreshProjects();
                 handleOpenProjectInEditor(userProj);
@@ -326,7 +333,7 @@ export default function App() {
               onOpenEditorWithShorts={(plan) => {
                 const shortsProject: Project = {
                   id: 'short-' + Date.now(),
-                  userId: fbUser.uid,
+                  userId: sessionUser.id,
                   name: plan.title || 'Untitled Short',
                   type: 'YouTube Shorts',
                   aspectRatio: '9:16',
@@ -361,11 +368,11 @@ export default function App() {
           )}
 
           {currentRoute === 'video-editor' && (
-            currentEditingProject && (isAdmin || currentEditingProject.userId === fbUser.uid) ? (
+            currentEditingProject && (isAdmin || currentEditingProject.userId === sessionUser.id) ? (
               <VideoEditor
                 project={currentEditingProject}
                 onSaveProject={(proj) => {
-                  const secured = { ...proj, userId: fbUser.uid };
+                  const secured = { ...proj, userId: sessionUser.id };
                   StudioApiService.saveProject(secured);
                   refreshProjects();
                 }}
@@ -411,7 +418,7 @@ export default function App() {
           {currentRoute === 'music-video' && (
             <MusicVideoPlanner
               onCreateProject={(project) => {
-                const userProj = { ...project, userId: fbUser.uid };
+                const userProj = { ...project, userId: sessionUser.id };
                 StudioApiService.saveProject(userProj);
                 refreshProjects();
                 handleOpenProjectInEditor(userProj);
@@ -789,7 +796,7 @@ export default function App() {
         />
       )}
 
-      {/* Auth Modal with Google OAuth & Role Switching */}
+      {/* Auth Modal with Username/Password Authentication */}
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}

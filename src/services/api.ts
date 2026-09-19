@@ -15,6 +15,7 @@ import {
 } from '../types';
 
 import { INITIAL_PROJECTS, INITIAL_TEMPLATES, INITIAL_ANNOUNCEMENTS, DEFAULT_USAGE_CONTROL, DEFAULT_ADMIN_YT_CHANNEL } from '../data/mockData';
+import { getAuthHeaders } from '../lib/authClient';
 
 const STORAGE_KEYS = {
   PROJECTS: 'kiran_studio_projects',
@@ -113,7 +114,45 @@ export class StudioApiService {
     }
   }
 
-  // Projects CRUD
+  // Projects CRUD with Server Synchronization and User Isolation
+  static async fetchProjectsFromServer(): Promise<Project[]> {
+    try {
+      const res = await fetch('/api/projects', {
+        method: 'GET',
+        headers: getAuthHeaders(),
+        credentials: 'include'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.projects)) {
+          const mappedProjects: Project[] = data.projects.map((p: any) => ({
+            id: p.id,
+            userId: p.userId,
+            name: p.title || p.name || 'Untitled Project',
+            type: p.type || 'YouTube Video',
+            aspectRatio: p.aspectRatio || '16:9',
+            duration: p.duration || '60 seconds',
+            status: p.status === 'ready' || p.status === 'Completed' ? 'Completed' : (p.status === 'draft' || p.status === 'Draft' ? 'Draft' : 'Generating'),
+            thumbnailUrl: p.thumbnailUrl || 'https://images.unsplash.com/photo-1544735716-392fe2489ffa?w=800&auto=format&fit=crop&q=80',
+            videoUrl: p.videoUrl || '',
+            createdAt: p.createdAt,
+            updatedAt: p.updatedAt,
+            tags: p.tags || ['AI Video'],
+            scenesCount: p.scenesCount || (p.scenes ? p.scenes.length : 3),
+            quality: p.quality || '1080p Full HD',
+            script: p.script || '',
+            scenes: p.scenes || []
+          }));
+          this.setStored(STORAGE_KEYS.PROJECTS, mappedProjects);
+          return mappedProjects;
+        }
+      }
+    } catch (e) {
+      console.error('Failed to sync projects from server:', e);
+    }
+    return this.getProjects();
+  }
+
   static getProjects(): Project[] {
     return this.getStored<Project[]>(STORAGE_KEYS.PROJECTS, INITIAL_PROJECTS);
   }
@@ -129,12 +168,45 @@ export class StudioApiService {
       updated = [{ ...project, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, ...projects];
     }
     this.setStored(STORAGE_KEYS.PROJECTS, updated);
+
+    // Asynchronously synchronize to server
+    const isExisting = existingIndex >= 0;
+    const endpoint = isExisting ? `/api/projects/${project.id}` : '/api/projects';
+    const method = isExisting ? 'PUT' : 'POST';
+
+    fetch(endpoint, {
+      method,
+      headers: getAuthHeaders(),
+      credentials: 'include',
+      body: JSON.stringify({
+        title: project.name,
+        description: project.description || '',
+        type: project.type,
+        aspectRatio: project.aspectRatio,
+        duration: project.duration,
+        status: project.status === 'Completed' ? 'ready' : (project.status === 'Draft' ? 'draft' : 'in_progress'),
+        thumbnailUrl: project.thumbnailUrl,
+        videoUrl: project.videoUrl,
+        tags: project.tags,
+        scenesCount: project.scenesCount,
+        quality: project.quality,
+        script: project.script,
+        scenes: project.scenes
+      })
+    }).catch(err => console.error('Project server sync error:', err));
+
     return project;
   }
 
   static deleteProject(id: string): void {
     const projects = this.getProjects().filter(p => p.id !== id);
     this.setStored(STORAGE_KEYS.PROJECTS, projects);
+
+    fetch(`/api/projects/${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+      credentials: 'include'
+    }).catch(err => console.error('Project server delete error:', err));
   }
 
   static duplicateProject(id: string): Project | null {
@@ -150,6 +222,13 @@ export class StudioApiService {
       updatedAt: new Date().toISOString()
     };
     this.saveProject(duplicated);
+
+    fetch(`/api/projects/${id}/duplicate`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      credentials: 'include'
+    }).catch(err => console.error('Project server duplicate error:', err));
+
     return duplicated;
   }
 

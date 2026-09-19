@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import { User, AdminStats, Announcement, AdminUsageControl, ConnectedYouTubeChannel } from '../../types';
 import { StudioApiService } from '../../services/api';
-import { auth } from '../../lib/firebase';
+import { getAuthHeaders } from '../../lib/authClient';
 
 interface AdminPanelProps {
   currentUser: User | null;
@@ -85,14 +85,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [newBannerType, setNewBannerType] = useState<'info' | 'warning' | 'success'>('info');
 
   useEffect(() => {
-    // Fetch from the secure admin API using verified Firebase token
+    // Fetch from the secure admin API using verified session token
     const fetchSecureStats = async () => {
       try {
-        const user = auth.currentUser;
-        if (!user) return;
-        const token = await user.getIdToken();
         const res = await fetch('/api/admin/dashboard', {
-          headers: { 'Authorization': `Bearer ${token}` }
+          headers: getAuthHeaders(),
+          credentials: 'include'
         });
         if (res.ok) {
           const data = await res.json();
