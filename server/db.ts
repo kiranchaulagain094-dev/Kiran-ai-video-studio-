@@ -50,25 +50,34 @@ interface DatabaseSchema {
 // -----------------------------------------------------------------------------
 let pgPool: Pool | null = null;
 let pgInitialized = false;
+let pgDisabled = false;
 
 export function getPgPool(): Pool | null {
+  if (pgDisabled) return null;
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
     return null;
   }
   if (!pgPool) {
-    pgPool = new Pool({
-      connectionString,
-      ssl: connectionString.includes('sslmode=disable')
-        ? false
-        : { rejectUnauthorized: false }, // Compatible with Neon, Supabase, AWS RDS Aurora
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000,
-    });
-    pgPool.on('error', (err) => {
-      console.error('Unexpected PostgreSQL client error:', err);
-    });
+    try {
+      pgPool = new Pool({
+        connectionString,
+        ssl: connectionString.includes('sslmode=disable')
+          ? false
+          : { rejectUnauthorized: false }, // Compatible with Neon, Supabase, AWS RDS Aurora
+        max: 5,
+        idleTimeoutMillis: 10000,
+        connectionTimeoutMillis: 3500, // 3.5s timeout prevents serverless timeout
+      });
+      pgPool.on('error', (err) => {
+        console.warn('PostgreSQL pool error, falling back to storage engine:', err.message);
+        pgDisabled = true;
+      });
+    } catch (err: any) {
+      console.warn('Failed to construct PostgreSQL pool, using fallback storage:', err?.message);
+      pgDisabled = true;
+      return null;
+    }
   }
   return pgPool;
 }
@@ -132,13 +141,14 @@ async function initPgTables(pool: Pool): Promise<void> {
     `);
     pgInitialized = true;
     console.log('PostgreSQL tables verified and initialized successfully.');
-  } catch (err) {
-    console.error('Error initializing PostgreSQL tables:', err);
+  } catch (err: any) {
+    console.warn('PostgreSQL table init failed (falling back to storage engine):', err.message);
+    pgDisabled = true;
   }
 }
 
 // -----------------------------------------------------------------------------
-// Fallback Local File Storage (Used when DATABASE_URL is not set)
+// Fallback Local File Storage (Used when DATABASE_URL is not set or fails)
 // -----------------------------------------------------------------------------
 const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 const DATA_DIR = isServerless ? path.join('/tmp', 'kiran_studio_data') : path.join(process.cwd(), 'data');
@@ -153,8 +163,8 @@ function ensureDatabaseFile(): void {
       const initial: DatabaseSchema = { users: [], projects: [] };
       fs.writeFileSync(DB_FILE, JSON.stringify(initial, null, 2), 'utf-8');
     }
-  } catch (err) {
-    console.error('Failed to initialize local fallback database file:', err);
+  } catch (err: any) {
+    console.warn('Fallback database directory notice:', err.message);
   }
 }
 
@@ -169,29 +179,35 @@ export class DatabaseService {
 
   // Local file read/write helpers
   private static readLocalData(): DatabaseSchema {
-    ensureDatabaseFile();
     try {
+      ensureDatabaseFile();
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
-        this.cache = JSON.parse(raw);
-        return this.cache!;
+        const parsed = JSON.parse(raw);
+        if (parsed && Array.isArray(parsed.users) && Array.isArray(parsed.projects)) {
+          this.cache = parsed;
+          return this.cache!;
+        }
       }
-    } catch (e) {
-      console.error('Local database read error:', e);
+    } catch (e: any) {
+      console.warn('Local database read notice:', e.message);
     }
-    if (this.cache) return this.cache;
-    return { users: [], projects: [] };
+    if (this.cache && Array.isArray(this.cache.users) && Array.isArray(this.cache.projects)) {
+      return this.cache;
+    }
+    this.cache = { users: [], projects: [] };
+    return this.cache;
   }
 
   private static writeLocalData(data: DatabaseSchema): void {
     this.cache = data;
-    ensureDatabaseFile();
     try {
+      ensureDatabaseFile();
       const tempPath = `${DB_FILE}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}.tmp`;
       fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf-8');
       fs.renameSync(tempPath, DB_FILE);
-    } catch (e) {
-      console.error('Local database write error:', e);
+    } catch (e: any) {
+      console.warn('Local database file persist notice (in-memory state active):', e.message);
     }
   }
 
@@ -203,23 +219,28 @@ export class DatabaseService {
     const normalized = username.trim().toLowerCase();
     const pool = getPgPool();
     if (pool) {
-      await initPgTables(pool);
-      const res: QueryResult = await pool.query(
-        'SELECT id, username, display_username, password_hash, role, status, avatar, created_at FROM users WHERE LOWER(username) = $1 LIMIT 1',
-        [normalized]
-      );
-      if (res.rows.length === 0) return null;
-      const row = res.rows[0];
-      return {
-        id: row.id,
-        username: row.username,
-        displayUsername: row.display_username,
-        passwordHash: row.password_hash,
-        role: row.role,
-        status: row.status,
-        avatar: row.avatar,
-        createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
-      };
+      try {
+        await initPgTables(pool);
+        const res: QueryResult = await pool.query(
+          'SELECT id, username, display_username, password_hash, role, status, avatar, created_at FROM users WHERE LOWER(username) = $1 LIMIT 1',
+          [normalized]
+        );
+        if (res.rows.length === 0) return null;
+        const row = res.rows[0];
+        return {
+          id: row.id,
+          username: row.username,
+          displayUsername: row.display_username,
+          passwordHash: row.password_hash,
+          role: row.role,
+          status: row.status,
+          avatar: row.avatar,
+          createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
+        };
+      } catch (pgErr: any) {
+        console.warn('PostgreSQL findUserByUsername failed, falling back to local storage engine:', pgErr.message);
+        pgDisabled = true;
+      }
     }
 
     const data = this.readLocalData();
@@ -229,23 +250,28 @@ export class DatabaseService {
   static async findUserById(id: string): Promise<DbUser | null> {
     const pool = getPgPool();
     if (pool) {
-      await initPgTables(pool);
-      const res: QueryResult = await pool.query(
-        'SELECT id, username, display_username, password_hash, role, status, avatar, created_at FROM users WHERE id = $1 LIMIT 1',
-        [id]
-      );
-      if (res.rows.length === 0) return null;
-      const row = res.rows[0];
-      return {
-        id: row.id,
-        username: row.username,
-        displayUsername: row.display_username,
-        passwordHash: row.password_hash,
-        role: row.role,
-        status: row.status,
-        avatar: row.avatar,
-        createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
-      };
+      try {
+        await initPgTables(pool);
+        const res: QueryResult = await pool.query(
+          'SELECT id, username, display_username, password_hash, role, status, avatar, created_at FROM users WHERE id = $1 LIMIT 1',
+          [id]
+        );
+        if (res.rows.length === 0) return null;
+        const row = res.rows[0];
+        return {
+          id: row.id,
+          username: row.username,
+          displayUsername: row.display_username,
+          passwordHash: row.password_hash,
+          role: row.role,
+          status: row.status,
+          avatar: row.avatar,
+          createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
+        };
+      } catch (pgErr: any) {
+        console.warn('PostgreSQL findUserById failed, falling back to local storage engine:', pgErr.message);
+        pgDisabled = true;
+      }
     }
 
     const data = this.readLocalData();
@@ -260,36 +286,37 @@ export class DatabaseService {
 
     const pool = getPgPool();
     if (pool) {
-      await initPgTables(pool);
-      // Check count to auto-promote first user or admin username
-      const countRes = await pool.query('SELECT COUNT(*) FROM users');
-      const userCount = parseInt(countRes.rows[0]?.count || '0', 10);
-      const isAdmin = user.role === 'admin' || userCount === 0 || normalized.includes('admin') || normalized === 'kiran';
-      const role = isAdmin ? 'admin' : 'user';
-
       try {
+        await initPgTables(pool);
+        // Check count to auto-promote first user or admin username
+        const countRes = await pool.query('SELECT COUNT(*) FROM users');
+        const userCount = parseInt(countRes.rows[0]?.count || '0', 10);
+        const isAdmin = user.role === 'admin' || userCount === 0 || normalized.includes('admin') || normalized === 'kiran';
+        const role = isAdmin ? 'admin' : 'user';
+
         await pool.query(
           `INSERT INTO users (id, username, display_username, password_hash, role, status, avatar, created_at, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
           [uniqueId, normalized, user.displayUsername || user.username.trim(), user.passwordHash, role, 'active', avatar, createdAt]
         );
+
+        return {
+          id: uniqueId,
+          username: normalized,
+          displayUsername: user.displayUsername || user.username.trim(),
+          passwordHash: user.passwordHash,
+          role,
+          createdAt,
+          avatar,
+          status: 'active'
+        };
       } catch (err: any) {
         if (err.code === '23505') { // Postgres unique_violation
           throw new Error('Username is already registered');
         }
-        throw err;
+        console.warn('PostgreSQL createUser failed, falling back to local storage engine:', err.message);
+        pgDisabled = true;
       }
-
-      return {
-        id: uniqueId,
-        username: normalized,
-        displayUsername: user.displayUsername || user.username.trim(),
-        passwordHash: user.passwordHash,
-        role,
-        createdAt,
-        avatar,
-        status: 'active'
-      };
     }
 
     // Local fallback
@@ -318,19 +345,24 @@ export class DatabaseService {
   static async getAllUsers(): Promise<Omit<DbUser, 'passwordHash'>[]> {
     const pool = getPgPool();
     if (pool) {
-      await initPgTables(pool);
-      const res = await pool.query(
-        'SELECT id, username, display_username, role, status, avatar, created_at FROM users ORDER BY created_at DESC'
-      );
-      return res.rows.map(row => ({
-        id: row.id,
-        username: row.username,
-        displayUsername: row.display_username,
-        role: row.role,
-        status: row.status,
-        avatar: row.avatar,
-        createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
-      }));
+      try {
+        await initPgTables(pool);
+        const res = await pool.query(
+          'SELECT id, username, display_username, role, status, avatar, created_at FROM users ORDER BY created_at DESC'
+        );
+        return res.rows.map(row => ({
+          id: row.id,
+          username: row.username,
+          displayUsername: row.display_username,
+          role: row.role,
+          status: row.status,
+          avatar: row.avatar,
+          createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
+        }));
+      } catch (err: any) {
+        console.warn('PostgreSQL getAllUsers failed, falling back to local storage engine:', err.message);
+        pgDisabled = true;
+      }
     }
 
     const data = this.readLocalData();
@@ -340,9 +372,14 @@ export class DatabaseService {
   static async updateUserStatus(userId: string, status: 'active' | 'suspended'): Promise<boolean> {
     const pool = getPgPool();
     if (pool) {
-      await initPgTables(pool);
-      const res = await pool.query('UPDATE users SET status = $1 WHERE id = $2', [status, userId]);
-      return (res.rowCount ?? 0) > 0;
+      try {
+        await initPgTables(pool);
+        const res = await pool.query('UPDATE users SET status = $1 WHERE id = $2', [status, userId]);
+        return (res.rowCount ?? 0) > 0;
+      } catch (err: any) {
+        console.warn('PostgreSQL updateUserStatus failed, falling back to local storage engine:', err.message);
+        pgDisabled = true;
+      }
     }
 
     const data = this.readLocalData();
@@ -397,33 +434,38 @@ export class DatabaseService {
   static async getProjectsForUser(userId: string, isAdmin: boolean = false): Promise<DbProject[]> {
     const pool = getPgPool();
     if (pool) {
-      await initPgTables(pool);
-      let query = 'SELECT * FROM projects ORDER BY updated_at DESC';
-      let params: any[] = [];
-      if (!isAdmin) {
-        query = 'SELECT * FROM projects WHERE user_id = $1 ORDER BY updated_at DESC';
-        params = [userId];
+      try {
+        await initPgTables(pool);
+        let query = 'SELECT * FROM projects ORDER BY updated_at DESC';
+        let params: any[] = [];
+        if (!isAdmin) {
+          query = 'SELECT * FROM projects WHERE user_id = $1 ORDER BY updated_at DESC';
+          params = [userId];
+        }
+        const res = await pool.query(query, params);
+        return res.rows.map(row => ({
+          id: row.id,
+          userId: row.user_id,
+          title: row.title,
+          description: row.description || '',
+          type: row.type,
+          aspectRatio: row.aspect_ratio,
+          duration: row.duration,
+          status: row.status,
+          thumbnailUrl: row.thumbnail_url,
+          videoUrl: row.video_url,
+          createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+          updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
+          tags: row.tags || ['AI Video'],
+          scenesCount: row.scenes_count,
+          quality: row.quality,
+          script: row.script || '',
+          scenes: typeof row.scenes === 'string' ? JSON.parse(row.scenes) : (row.scenes || [])
+        }));
+      } catch (err: any) {
+        console.warn('PostgreSQL getProjectsForUser failed, falling back to local storage engine:', err.message);
+        pgDisabled = true;
       }
-      const res = await pool.query(query, params);
-      return res.rows.map(row => ({
-        id: row.id,
-        userId: row.user_id,
-        title: row.title,
-        description: row.description || '',
-        type: row.type,
-        aspectRatio: row.aspect_ratio,
-        duration: row.duration,
-        status: row.status,
-        thumbnailUrl: row.thumbnail_url,
-        videoUrl: row.video_url,
-        createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
-        updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
-        tags: row.tags || ['AI Video'],
-        scenesCount: row.scenes_count,
-        quality: row.quality,
-        script: row.script || '',
-        scenes: typeof row.scenes === 'string' ? JSON.parse(row.scenes) : (row.scenes || [])
-      }));
     }
 
     const data = this.readLocalData();
@@ -436,29 +478,34 @@ export class DatabaseService {
   static async getProjectById(projectId: string): Promise<DbProject | null> {
     const pool = getPgPool();
     if (pool) {
-      await initPgTables(pool);
-      const res = await pool.query('SELECT * FROM projects WHERE id = $1 LIMIT 1', [projectId]);
-      if (res.rows.length === 0) return null;
-      const row = res.rows[0];
-      return {
-        id: row.id,
-        userId: row.user_id,
-        title: row.title,
-        description: row.description || '',
-        type: row.type,
-        aspectRatio: row.aspect_ratio,
-        duration: row.duration,
-        status: row.status,
-        thumbnailUrl: row.thumbnail_url,
-        videoUrl: row.video_url,
-        createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
-        updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
-        tags: row.tags || ['AI Video'],
-        scenesCount: row.scenes_count,
-        quality: row.quality,
-        script: row.script || '',
-        scenes: typeof row.scenes === 'string' ? JSON.parse(row.scenes) : (row.scenes || [])
-      };
+      try {
+        await initPgTables(pool);
+        const res = await pool.query('SELECT * FROM projects WHERE id = $1 LIMIT 1', [projectId]);
+        if (res.rows.length === 0) return null;
+        const row = res.rows[0];
+        return {
+          id: row.id,
+          userId: row.user_id,
+          title: row.title,
+          description: row.description || '',
+          type: row.type,
+          aspectRatio: row.aspect_ratio,
+          duration: row.duration,
+          status: row.status,
+          thumbnailUrl: row.thumbnail_url,
+          videoUrl: row.video_url,
+          createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+          updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
+          tags: row.tags || ['AI Video'],
+          scenesCount: row.scenes_count,
+          quality: row.quality,
+          script: row.script || '',
+          scenes: typeof row.scenes === 'string' ? JSON.parse(row.scenes) : (row.scenes || [])
+        };
+      } catch (err: any) {
+        console.warn('PostgreSQL getProjectById failed, falling back to local storage engine:', err.message);
+        pgDisabled = true;
+      }
     }
 
     const data = this.readLocalData();
@@ -484,29 +531,34 @@ export class DatabaseService {
 
     const pool = getPgPool();
     if (pool) {
-      await initPgTables(pool);
-      await pool.query(
-        `INSERT INTO projects (
-          id, user_id, title, description, type, aspect_ratio, duration,
-          status, thumbnail_url, video_url, tags, scenes_count, quality,
-          script, scenes, created_at, updated_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7,
-          $8, $9, $10, $11, $12, $13,
-          $14, $15, $16, $16
-        )`,
-        [
-          id, userId, title, description, type, aspectRatio, duration,
-          status, thumbnailUrl, videoUrl, tags, scenesCount, quality,
-          script, JSON.stringify(scenes), now
-        ]
-      );
+      try {
+        await initPgTables(pool);
+        await pool.query(
+          `INSERT INTO projects (
+            id, user_id, title, description, type, aspect_ratio, duration,
+            status, thumbnail_url, video_url, tags, scenes_count, quality,
+            script, scenes, created_at, updated_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7,
+            $8, $9, $10, $11, $12, $13,
+            $14, $15, $16, $16
+          )`,
+          [
+            id, userId, title, description, type, aspectRatio, duration,
+            status, thumbnailUrl, videoUrl, tags, scenesCount, quality,
+            script, JSON.stringify(scenes), now
+          ]
+        );
 
-      return {
-        id, userId, title, description, type, aspectRatio, duration,
-        status, thumbnailUrl, videoUrl, createdAt: now, updatedAt: now,
-        tags, scenesCount, quality, script, scenes
-      };
+        return {
+          id, userId, title, description, type, aspectRatio, duration,
+          status, thumbnailUrl, videoUrl, createdAt: now, updatedAt: now,
+          tags, scenesCount, quality, script, scenes
+        };
+      } catch (err: any) {
+        console.warn('PostgreSQL createProject failed, falling back to local storage engine:', err.message);
+        pgDisabled = true;
+      }
     }
 
     // Local fallback
@@ -539,60 +591,68 @@ export class DatabaseService {
   static async updateProject(projectId: string, userId: string, updates: Partial<DbProject>, isAdmin: boolean = false): Promise<DbProject> {
     const pool = getPgPool();
     if (pool) {
-      await initPgTables(pool);
-      const existing = await this.getProjectById(projectId);
-      if (!existing) {
-        throw new Error('Project not found');
+      try {
+        await initPgTables(pool);
+        const existing = await this.getProjectById(projectId);
+        if (!existing) {
+          throw new Error('Project not found');
+        }
+        if (existing.userId !== userId && !isAdmin) {
+          throw new Error('Unauthorized: You do not own this project');
+        }
+
+        const now = new Date().toISOString();
+        const title = updates.title !== undefined ? updates.title.trim() : existing.title;
+        const description = updates.description !== undefined ? updates.description : existing.description;
+        const type = updates.type !== undefined ? updates.type : existing.type;
+        const aspectRatio = updates.aspectRatio !== undefined ? updates.aspectRatio : existing.aspectRatio;
+        const duration = updates.duration !== undefined ? updates.duration : existing.duration;
+        const status = updates.status !== undefined ? (updates.status as any) : existing.status;
+        const thumbnailUrl = updates.thumbnailUrl !== undefined ? updates.thumbnailUrl : existing.thumbnailUrl;
+        const videoUrl = updates.videoUrl !== undefined ? updates.videoUrl : existing.videoUrl;
+        const tags = updates.tags !== undefined ? updates.tags : existing.tags;
+        const scenesCount = updates.scenesCount !== undefined ? updates.scenesCount : existing.scenesCount;
+        const quality = updates.quality !== undefined ? updates.quality : existing.quality;
+        const script = updates.script !== undefined ? updates.script : existing.script;
+        const scenes = updates.scenes !== undefined ? updates.scenes : existing.scenes;
+
+        await pool.query(
+          `UPDATE projects SET
+            title = $1, description = $2, type = $3, aspect_ratio = $4, duration = $5,
+            status = $6, thumbnail_url = $7, video_url = $8, tags = $9, scenes_count = $10,
+            quality = $11, script = $12, scenes = $13, updated_at = $14
+          WHERE id = $15`,
+          [
+            title, description, type, aspectRatio, duration,
+            status, thumbnailUrl, videoUrl, tags, scenesCount,
+            quality, script, JSON.stringify(scenes), now, projectId
+          ]
+        );
+
+        return {
+          ...existing,
+          title,
+          description,
+          type,
+          aspectRatio,
+          duration,
+          status,
+          thumbnailUrl,
+          videoUrl,
+          tags,
+          scenesCount,
+          quality,
+          script,
+          scenes,
+          updatedAt: now
+        };
+      } catch (err: any) {
+        if (err.message?.includes('Unauthorized') || err.message?.includes('not found')) {
+          throw err;
+        }
+        console.warn('PostgreSQL updateProject failed, falling back to local storage engine:', err.message);
+        pgDisabled = true;
       }
-      if (existing.userId !== userId && !isAdmin) {
-        throw new Error('Unauthorized: You do not own this project');
-      }
-
-      const now = new Date().toISOString();
-      const title = updates.title !== undefined ? updates.title.trim() : existing.title;
-      const description = updates.description !== undefined ? updates.description : existing.description;
-      const type = updates.type !== undefined ? updates.type : existing.type;
-      const aspectRatio = updates.aspectRatio !== undefined ? updates.aspectRatio : existing.aspectRatio;
-      const duration = updates.duration !== undefined ? updates.duration : existing.duration;
-      const status = updates.status !== undefined ? (updates.status as any) : existing.status;
-      const thumbnailUrl = updates.thumbnailUrl !== undefined ? updates.thumbnailUrl : existing.thumbnailUrl;
-      const videoUrl = updates.videoUrl !== undefined ? updates.videoUrl : existing.videoUrl;
-      const tags = updates.tags !== undefined ? updates.tags : existing.tags;
-      const scenesCount = updates.scenesCount !== undefined ? updates.scenesCount : existing.scenesCount;
-      const quality = updates.quality !== undefined ? updates.quality : existing.quality;
-      const script = updates.script !== undefined ? updates.script : existing.script;
-      const scenes = updates.scenes !== undefined ? updates.scenes : existing.scenes;
-
-      await pool.query(
-        `UPDATE projects SET
-          title = $1, description = $2, type = $3, aspect_ratio = $4, duration = $5,
-          status = $6, thumbnail_url = $7, video_url = $8, tags = $9, scenes_count = $10,
-          quality = $11, script = $12, scenes = $13, updated_at = $14
-        WHERE id = $15`,
-        [
-          title, description, type, aspectRatio, duration,
-          status, thumbnailUrl, videoUrl, tags, scenesCount,
-          quality, script, JSON.stringify(scenes), now, projectId
-        ]
-      );
-
-      return {
-        ...existing,
-        title,
-        description,
-        type,
-        aspectRatio,
-        duration,
-        status,
-        thumbnailUrl,
-        videoUrl,
-        tags,
-        scenesCount,
-        quality,
-        script,
-        scenes,
-        updatedAt: now
-      };
     }
 
     // Local fallback
@@ -625,17 +685,25 @@ export class DatabaseService {
   static async deleteProject(projectId: string, userId: string, isAdmin: boolean = false): Promise<boolean> {
     const pool = getPgPool();
     if (pool) {
-      await initPgTables(pool);
-      const existing = await this.getProjectById(projectId);
-      if (!existing) {
-        throw new Error('Project not found');
-      }
-      if (existing.userId !== userId && !isAdmin) {
-        throw new Error('Unauthorized: You do not own this project');
-      }
+      try {
+        await initPgTables(pool);
+        const existing = await this.getProjectById(projectId);
+        if (!existing) {
+          throw new Error('Project not found');
+        }
+        if (existing.userId !== userId && !isAdmin) {
+          throw new Error('Unauthorized: You do not own this project');
+        }
 
-      await pool.query('DELETE FROM projects WHERE id = $1', [projectId]);
-      return true;
+        await pool.query('DELETE FROM projects WHERE id = $1', [projectId]);
+        return true;
+      } catch (err: any) {
+        if (err.message?.includes('Unauthorized') || err.message?.includes('not found')) {
+          throw err;
+        }
+        console.warn('PostgreSQL deleteProject failed, falling back to local storage engine:', err.message);
+        pgDisabled = true;
+      }
     }
 
     // Local fallback
