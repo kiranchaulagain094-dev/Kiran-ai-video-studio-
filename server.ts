@@ -6,7 +6,7 @@ dotenv.config();
 
 import { VideoGenerationService } from './src/services/videoGeneration';
 import { GoogleGenAI } from '@google/genai';
-import { DatabaseService } from './server/db';
+import { DatabaseService, DbUser } from './server/db';
 import { AuthService, requireAuth, requireAdmin, AuthenticatedRequest } from './server/auth';
 
 const app = express();
@@ -614,51 +614,60 @@ Respond ONLY with valid JSON in this exact structure without markdown backticks:
 // 1. User Registration: Requires ONLY username and password
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password } = req.body || {};
 
     // Strict input validation
-    if (!username || typeof username !== 'string') {
-      return res.status(400).json({ error: 'Username is required.' });
+    if (!username || typeof username !== 'string' || !username.trim()) {
+      return res.status(400).json({ success: false, error: 'Username is required.' });
     }
 
     const trimmedUsername = username.trim();
     if (trimmedUsername.length < 3 || trimmedUsername.length > 30) {
-      return res.status(400).json({ error: 'Username must be between 3 and 30 characters.' });
+      return res.status(400).json({ success: false, error: 'Username must be 3-30 characters' });
     }
 
     // Alphanumeric + underscores only
     if (!/^[a-zA-Z0-9_]+$/.test(trimmedUsername)) {
-      return res.status(400).json({ error: 'Username can only contain letters, numbers, and underscores.' });
+      return res.status(400).json({ success: false, error: 'Username can only contain letters, numbers, and underscores.' });
     }
 
     if (!password || typeof password !== 'string') {
-      return res.status(400).json({ error: 'Password is required.' });
+      return res.status(400).json({ success: false, error: 'Password is required.' });
     }
 
     if (password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
+      return res.status(400).json({ success: false, error: 'Password must be at least 6 characters' });
     }
 
     if (password.length > 128) {
-      return res.status(400).json({ error: 'Password cannot exceed 128 characters.' });
+      return res.status(400).json({ success: false, error: 'Password cannot exceed 128 characters.' });
     }
 
     // Check username uniqueness (case-insensitive)
     const existing = await DatabaseService.findUserByUsername(trimmedUsername);
     if (existing) {
-      return res.status(409).json({ error: 'Username is already taken. Please choose another.' });
+      return res.status(409).json({ success: false, error: 'Username already exists' });
     }
 
     // Secure password hashing with bcrypt - never store plaintext
     const passwordHash = await AuthService.hashPassword(password);
 
     // Create user with unique immutable user ID
-    const newUser = await DatabaseService.createUser({
-      username: trimmedUsername,
-      displayUsername: trimmedUsername,
-      passwordHash,
-      role: 'user'
-    });
+    let newUser: DbUser;
+    try {
+      newUser = await DatabaseService.createUser({
+        username: trimmedUsername,
+        displayUsername: trimmedUsername,
+        passwordHash,
+        role: 'user'
+      });
+    } catch (createErr: any) {
+      const errMsg = createErr?.message || '';
+      if (errMsg.toLowerCase().includes('already') || errMsg.toLowerCase().includes('unique') || errMsg.toLowerCase().includes('duplicate')) {
+        return res.status(409).json({ success: false, error: 'Username already exists' });
+      }
+      throw createErr;
+    }
 
     // Generate secure session token
     const token = AuthService.createToken(newUser);
@@ -666,7 +675,11 @@ app.post('/api/auth/register', async (req, res) => {
     // Record session in user_sessions table when PostgreSQL is configured
     const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
     const userAgent = req.headers['user-agent'] as string || '';
-    await DatabaseService.registerSession(newUser.id, token, clientIp, userAgent);
+    try {
+      await DatabaseService.registerSession(newUser.id, token, clientIp, userAgent);
+    } catch (sessionErr) {
+      console.warn('Session registration notice:', sessionErr);
+    }
 
     // Set secure HttpOnly cookie
     AuthService.setSessionCookie(res, token);
@@ -684,7 +697,11 @@ app.post('/api/auth/register', async (req, res) => {
     });
   } catch (err: any) {
     console.error('Registration error:', err);
-    return res.status(500).json({ error: err.message || 'Registration failed. Please try again.' });
+    const msg = err?.message || 'Unable to create account. Please try again.';
+    if (msg.toLowerCase().includes('already') || msg.toLowerCase().includes('duplicate') || msg.toLowerCase().includes('unique')) {
+      return res.status(409).json({ success: false, error: 'Username already exists' });
+    }
+    return res.status(500).json({ success: false, error: 'Unable to create account. Please try again.' });
   }
 });
 

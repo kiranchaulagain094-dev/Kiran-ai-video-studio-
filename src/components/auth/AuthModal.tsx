@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, ShieldAlert, KeyRound, User, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { formatErrorMessage } from '../../lib/authClient';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -42,8 +43,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLoginSu
       }
       onLoginSuccess();
       onClose();
-    } catch (error: any) {
-      setErrorMessage(error.message || 'Authentication failed. Please check your credentials.');
+    } catch (error: unknown) {
+      const fallbackMsg = activeTab === 'login' ? 'Invalid username or password.' : 'Unable to create account. Please try again.';
+      setErrorMessage(formatErrorMessage(error, fallbackMsg));
     } finally {
       setIsLoading(false);
     }

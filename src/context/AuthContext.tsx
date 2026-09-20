@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { AuthApiClient, SafeUser } from '../lib/authClient';
+import { AuthApiClient, SafeUser, formatErrorMessage } from '../lib/authClient';
 
 interface AuthContextType {
   currentUser: SafeUser | null;
@@ -76,9 +76,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsAdmin(user.role === 'admin');
       return user;
     } catch (err: any) {
-      const msg = err.message || 'Login failed. Please check your credentials.';
+      const msg = formatErrorMessage(err, 'Invalid username or password.');
       setAuthError(msg);
-      throw err;
+      throw new Error(msg);
     }
   };
 
@@ -90,9 +90,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsAdmin(user.role === 'admin');
       return user;
     } catch (err: any) {
-      const msg = err.message || 'Registration failed.';
+      const msg = formatErrorMessage(err, 'Unable to create account. Please try again.');
       setAuthError(msg);
-      throw err;
+      throw new Error(msg);
     }
   };
 

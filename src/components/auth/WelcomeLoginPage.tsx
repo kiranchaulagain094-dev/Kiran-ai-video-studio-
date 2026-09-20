@@ -13,6 +13,7 @@ import {
   UserPlus
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { formatErrorMessage } from '../../lib/authClient';
 
 interface WelcomeLoginPageProps {
   onLoginSuccess?: () => void;
@@ -51,7 +52,7 @@ export const WelcomeLoginPage: React.FC<WelcomeLoginPageProps> = ({ onLoginSucce
     }
 
     if (cleanUsername.length < 3 || cleanUsername.length > 30) {
-      setLocalError('Username must be between 3 and 30 characters.');
+      setLocalError('Username must be 3-30 characters');
       return false;
     }
 
@@ -66,7 +67,7 @@ export const WelcomeLoginPage: React.FC<WelcomeLoginPageProps> = ({ onLoginSucce
     }
 
     if (password.length < 6) {
-      setLocalError('Password must be at least 6 characters.');
+      setLocalError('Password must be at least 6 characters');
       return false;
     }
 
@@ -101,14 +102,19 @@ export const WelcomeLoginPage: React.FC<WelcomeLoginPageProps> = ({ onLoginSucce
       if (onLoginSuccess) {
         onLoginSuccess();
       }
-    } catch (err: any) {
-      setLocalError(err.message || (activeTab === 'login' ? 'Invalid username or password.' : 'Registration failed.'));
+    } catch (err: unknown) {
+      const fallbackMsg = activeTab === 'login' 
+        ? 'Invalid username or password.' 
+        : 'Unable to create account. Please try again.';
+      const cleanMsg = formatErrorMessage(err, fallbackMsg);
+      setLocalError(cleanMsg);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const activeErrorMessage = localError || authError;
+  const rawActiveError = localError || authError;
+  const activeErrorMessage = rawActiveError ? formatErrorMessage(rawActiveError) : null;
 
   return (
     <div className="min-h-screen w-full bg-[#090b10] text-slate-100 flex flex-col justify-between selection:bg-indigo-500 selection:text-white relative overflow-hidden">

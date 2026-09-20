@@ -35,6 +35,81 @@ export function getAuthHeaders(): HeadersInit {
 }
 
 /**
+ * Formats any error (string, Error instance, object with message/error/details, HTTP error, etc.)
+ * into a safe, human-readable string.
+ * Strictly guarantees that "[object Object]" is NEVER returned or rendered.
+ */
+export function formatErrorMessage(
+  err: unknown, 
+  fallback: string = 'Unable to create account. Please try again.'
+): string {
+  if (err === null || err === undefined) return fallback;
+
+  // 1. If it's already a clean string
+  if (typeof err === 'string') {
+    const trimmed = err.trim();
+    if (!trimmed || trimmed === '[object Object]' || trimmed.includes('[object Object]')) {
+      return fallback;
+    }
+    return trimmed;
+  }
+
+  // 2. If it's an Error instance or object
+  if (typeof err === 'object') {
+    const anyErr = err as Record<string, any>;
+
+    // Priority 1: Check 'error' property
+    if (typeof anyErr.error === 'string') {
+      const trimmed = anyErr.error.trim();
+      if (trimmed && trimmed !== '[object Object]' && !trimmed.includes('[object Object]')) {
+        return trimmed;
+      }
+    } else if (typeof anyErr.error === 'object' && anyErr.error !== null) {
+      const nested = formatErrorMessage(anyErr.error, '');
+      if (nested && nested !== '[object Object]') return nested;
+    }
+
+    // Priority 2: Check 'message' property
+    if (typeof anyErr.message === 'string') {
+      const trimmed = anyErr.message.trim();
+      if (trimmed && trimmed !== '[object Object]' && !trimmed.includes('[object Object]')) {
+        return trimmed;
+      }
+    } else if (typeof anyErr.message === 'object' && anyErr.message !== null) {
+      const nested = formatErrorMessage(anyErr.message, '');
+      if (nested && nested !== '[object Object]') return nested;
+    }
+
+    // Priority 3: Check 'details' or 'msg' or 'reason'
+    const candidate = anyErr.details || anyErr.msg || anyErr.reason;
+    if (typeof candidate === 'string') {
+      const trimmed = candidate.trim();
+      if (trimmed && trimmed !== '[object Object]' && !trimmed.includes('[object Object]')) {
+        return trimmed;
+      }
+    }
+
+    // Priority 4: Status text
+    if (typeof anyErr.statusText === 'string' && anyErr.statusText.trim()) {
+      return anyErr.statusText.trim();
+    }
+
+    // Priority 5: Parse stringified JSON if it contains key values
+    try {
+      const jsonStr = JSON.stringify(anyErr);
+      if (jsonStr && jsonStr !== '{}' && jsonStr.length < 250) {
+        const match = jsonStr.match(/"(?:error|message|details)":\s*"([^"]+)"/i);
+        if (match && match[1] && match[1] !== '[object Object]') {
+          return match[1];
+        }
+      }
+    } catch {}
+  }
+
+  return fallback;
+}
+
+/**
  * Safely parses response from server, ensuring non-JSON or HTML server errors
  * (e.g., from Vercel 500/502/504) never throw raw SyntaxError exceptions.
  */
@@ -43,60 +118,70 @@ async function parseResponseSafely(res: Response, fallbackErrorMsg: string): Pro
   let rawText = '';
   try {
     rawText = await res.text();
-  } catch (readErr) {
+  } catch {
     throw new Error('Unable to read response from authentication server.');
   }
 
   let data: any = null;
+  const trimmed = rawText.trim();
   const isJsonCandidate = contentType.includes('application/json') || 
-    rawText.trim().startsWith('{') || 
-    rawText.trim().startsWith('[');
+    trimmed.startsWith('{') || 
+    trimmed.startsWith('[');
 
-  if (isJsonCandidate && rawText.trim().length > 0) {
+  if (isJsonCandidate && trimmed.length > 0) {
     try {
-      data = JSON.parse(rawText);
+      data = JSON.parse(trimmed);
     } catch {
       data = null;
     }
   }
 
   if (!res.ok) {
-    // If structured JSON error returned
+    let resolvedMsg = '';
+
     if (data && typeof data === 'object') {
-      const serverMsg = data.error || data.message || data.details;
-      if (serverMsg) {
-        throw new Error(serverMsg);
-      }
+      resolvedMsg = formatErrorMessage(data, '');
     }
 
     // If server returned plain text that is not a giant HTML document
-    const trimmed = rawText.trim();
-    if (trimmed && trimmed.length > 0 && trimmed.length < 200 && !trimmed.includes('<html') && !trimmed.includes('<!DOCTYPE')) {
-      // Clean up any known error prefix
+    if (!resolvedMsg && trimmed && trimmed.length > 0 && trimmed.length < 200 && !trimmed.includes('<html') && !trimmed.includes('<!DOCTYPE')) {
       if (trimmed.startsWith('A server error') || trimmed.startsWith('An error occurred')) {
-        throw new Error('The authentication server encountered a temporary error. Please try again in a few moments.');
+        resolvedMsg = 'The authentication server encountered a temporary error. Please try again in a few moments.';
+      } else {
+        resolvedMsg = trimmed;
       }
-      throw new Error(trimmed);
     }
 
     // Meaningful fallback based on standard HTTP status codes
-    if (res.status === 401) {
-      throw new Error('Invalid username or password. Please check your credentials.');
-    }
-    if (res.status === 403) {
-      throw new Error('Access denied. Account may be suspended or unauthorized.');
-    }
-    if (res.status === 404) {
-      throw new Error('Authentication endpoint was not found (404). Please ensure server API routes are deployed.');
-    }
-    if (res.status === 429) {
-      throw new Error('Too many login attempts. Please wait a few minutes before trying again.');
-    }
-    if (res.status >= 500) {
-      throw new Error(`Authentication server error (HTTP ${res.status}). Please check server logs or try again shortly.`);
+    if (!resolvedMsg) {
+      if (res.status === 400) {
+        resolvedMsg = 'Username must be 3-30 characters';
+      } else if (res.status === 409) {
+        resolvedMsg = 'Username already exists';
+      } else if (res.status === 401) {
+        resolvedMsg = 'Invalid username or password. Please check your credentials.';
+      } else if (res.status === 403) {
+        resolvedMsg = 'Access denied. Account may be suspended or unauthorized.';
+      } else if (res.status === 404) {
+        resolvedMsg = 'Authentication endpoint was not found (404). Please ensure server API routes are deployed.';
+      } else if (res.status === 429) {
+        resolvedMsg = 'Too many login attempts. Please wait a few minutes before trying again.';
+      } else if (res.status >= 500) {
+        resolvedMsg = 'Unable to create account. Please try again.';
+      } else {
+        resolvedMsg = fallbackErrorMsg;
+      }
     }
 
-    throw new Error(`${fallbackErrorMsg} (HTTP ${res.status})`);
+    throw new Error(formatErrorMessage(resolvedMsg, fallbackErrorMsg));
+  }
+
+  // Even if res.ok is true (HTTP 200), verify backend didn't return failure JSON { success: false, error: ... }
+  if (data && typeof data === 'object') {
+    if (data.success === false || (data.error && !data.user)) {
+      const errorMsg = formatErrorMessage(data, fallbackErrorMsg);
+      throw new Error(errorMsg);
+    }
   }
 
   if (!data) {
@@ -111,44 +196,62 @@ export const AuthApiClient = {
    * Register with ONLY username and password
    */
   async register(username: string, password: string): Promise<SafeUser> {
-    const res = await fetch('/api/auth/register', {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      credentials: 'include', // Includes HttpOnly session cookie
-      body: JSON.stringify({ username, password })
-    });
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        credentials: 'include', // Includes HttpOnly session cookie
+        body: JSON.stringify({ username, password })
+      });
 
-    const data = await parseResponseSafely(res, 'Registration failed');
+      const data = await parseResponseSafely(res, 'Unable to create account. Please try again.');
 
-    if (data.token) {
-      setMemoryToken(data.token);
+      if (!data.user) {
+        throw new Error('Unable to create account. Please try again.');
+      }
+
+      if (data.token) {
+        setMemoryToken(data.token);
+      }
+      return data.user;
+    } catch (err: any) {
+      const clean = formatErrorMessage(err, 'Unable to create account. Please try again.');
+      throw new Error(clean);
     }
-    return data.user;
   },
 
   /**
    * Login with username and password
    */
   async login(username: string, password: string): Promise<SafeUser> {
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      credentials: 'include',
-      body: JSON.stringify({ username, password })
-    });
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        credentials: 'include',
+        body: JSON.stringify({ username, password })
+      });
 
-    const data = await parseResponseSafely(res, 'Login failed');
+      const data = await parseResponseSafely(res, 'Invalid username or password.');
 
-    if (data.token) {
-      setMemoryToken(data.token);
+      if (!data.user) {
+        throw new Error('Invalid username or password.');
+      }
+
+      if (data.token) {
+        setMemoryToken(data.token);
+      }
+      return data.user;
+    } catch (err: any) {
+      const clean = formatErrorMessage(err, 'Invalid username or password.');
+      throw new Error(clean);
     }
-    return data.user;
   },
 
   /**

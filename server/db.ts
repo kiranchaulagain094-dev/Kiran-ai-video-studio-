@@ -312,7 +312,7 @@ export class DatabaseService {
         };
       } catch (err: any) {
         if (err.code === '23505') { // Postgres unique_violation
-          throw new Error('Username is already registered');
+          throw new Error('Username already exists');
         }
         console.warn('PostgreSQL createUser failed, falling back to local storage engine:', err.message);
         pgDisabled = true;
@@ -322,7 +322,7 @@ export class DatabaseService {
     // Local fallback
     const data = this.readLocalData();
     if (data.users.some(u => u.username === normalized)) {
-      throw new Error('Username is already registered');
+      throw new Error('Username already exists');
     }
 
     const isAdmin = user.role === 'admin' || data.users.length === 0 || normalized.includes('admin') || normalized === 'kiran';
