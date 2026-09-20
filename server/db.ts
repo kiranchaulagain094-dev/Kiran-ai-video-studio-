@@ -50,12 +50,19 @@ interface DatabaseSchema {
 // -----------------------------------------------------------------------------
 let pgPool: Pool | null = null;
 let pgInitialized = false;
-let pgDisabled = false;
+let pgDisabledUntil = 0;
+
+function handlePgError(context: string, err: any): void {
+  console.warn(`PostgreSQL ${context} notice:`, err?.message || err);
+  // Cooldown for 10 seconds to allow cold-start / wake up recovery
+  pgDisabledUntil = Date.now() + 10000;
+}
 
 export function getPgPool(): Pool | null {
-  if (pgDisabled) return null;
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
+  const now = Date.now();
+  if (pgDisabledUntil > now) return null;
+  const connectionString = process.env.DATABASE_URL?.trim();
+  if (!connectionString || (!connectionString.startsWith('postgresql://') && !connectionString.startsWith('postgres://'))) {
     return null;
   }
   if (!pgPool) {
@@ -65,17 +72,17 @@ export function getPgPool(): Pool | null {
         ssl: connectionString.includes('sslmode=disable')
           ? false
           : { rejectUnauthorized: false }, // Compatible with Neon, Supabase, AWS RDS Aurora
-        max: 5,
-        idleTimeoutMillis: 10000,
-        connectionTimeoutMillis: 3500, // 3.5s timeout prevents serverless timeout
+        max: 10,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 10000, // 10s timeout accommodates Neon cold-start wake-up
       });
       pgPool.on('error', (err) => {
-        console.warn('PostgreSQL pool error, falling back to storage engine:', err.message);
-        pgDisabled = true;
+        console.warn('PostgreSQL pool background error:', err.message);
+        pgDisabledUntil = Date.now() + 10000;
       });
     } catch (err: any) {
       console.warn('Failed to construct PostgreSQL pool, using fallback storage:', err?.message);
-      pgDisabled = true;
+      pgDisabledUntil = Date.now() + 10000;
       return null;
     }
   }
@@ -142,8 +149,7 @@ async function initPgTables(pool: Pool): Promise<void> {
     pgInitialized = true;
     console.log('PostgreSQL tables verified and initialized successfully.');
   } catch (err: any) {
-    console.warn('PostgreSQL table init failed (falling back to storage engine):', err.message);
-    pgDisabled = true;
+    handlePgError('table init failed (falling back to storage engine)', err);
   }
 }
 
@@ -238,8 +244,7 @@ export class DatabaseService {
           createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
         };
       } catch (pgErr: any) {
-        console.warn('PostgreSQL findUserByUsername failed, falling back to local storage engine:', pgErr.message);
-        pgDisabled = true;
+        handlePgError('findUserByUsername', pgErr);
       }
     }
 
@@ -269,8 +274,7 @@ export class DatabaseService {
           createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
         };
       } catch (pgErr: any) {
-        console.warn('PostgreSQL findUserById failed, falling back to local storage engine:', pgErr.message);
-        pgDisabled = true;
+        handlePgError('findUserById', pgErr);
       }
     }
 
@@ -314,8 +318,7 @@ export class DatabaseService {
         if (err.code === '23505') { // Postgres unique_violation
           throw new Error('Username already exists');
         }
-        console.warn('PostgreSQL createUser failed, falling back to local storage engine:', err.message);
-        pgDisabled = true;
+        handlePgError('createUser', err);
       }
     }
 
@@ -360,8 +363,7 @@ export class DatabaseService {
           createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString()
         }));
       } catch (err: any) {
-        console.warn('PostgreSQL getAllUsers failed, falling back to local storage engine:', err.message);
-        pgDisabled = true;
+        handlePgError('getAllUsers', err);
       }
     }
 
@@ -377,8 +379,7 @@ export class DatabaseService {
         const res = await pool.query('UPDATE users SET status = $1 WHERE id = $2', [status, userId]);
         return (res.rowCount ?? 0) > 0;
       } catch (err: any) {
-        console.warn('PostgreSQL updateUserStatus failed, falling back to local storage engine:', err.message);
-        pgDisabled = true;
+        handlePgError('updateUserStatus', err);
       }
     }
 
@@ -463,8 +464,7 @@ export class DatabaseService {
           scenes: typeof row.scenes === 'string' ? JSON.parse(row.scenes) : (row.scenes || [])
         }));
       } catch (err: any) {
-        console.warn('PostgreSQL getProjectsForUser failed, falling back to local storage engine:', err.message);
-        pgDisabled = true;
+        handlePgError('getProjectsForUser', err);
       }
     }
 
@@ -503,8 +503,7 @@ export class DatabaseService {
           scenes: typeof row.scenes === 'string' ? JSON.parse(row.scenes) : (row.scenes || [])
         };
       } catch (err: any) {
-        console.warn('PostgreSQL getProjectById failed, falling back to local storage engine:', err.message);
-        pgDisabled = true;
+        handlePgError('getProjectById', err);
       }
     }
 
@@ -556,8 +555,7 @@ export class DatabaseService {
           tags, scenesCount, quality, script, scenes
         };
       } catch (err: any) {
-        console.warn('PostgreSQL createProject failed, falling back to local storage engine:', err.message);
-        pgDisabled = true;
+        handlePgError('createProject', err);
       }
     }
 
@@ -650,8 +648,7 @@ export class DatabaseService {
         if (err.message?.includes('Unauthorized') || err.message?.includes('not found')) {
           throw err;
         }
-        console.warn('PostgreSQL updateProject failed, falling back to local storage engine:', err.message);
-        pgDisabled = true;
+        handlePgError('updateProject', err);
       }
     }
 
@@ -701,8 +698,7 @@ export class DatabaseService {
         if (err.message?.includes('Unauthorized') || err.message?.includes('not found')) {
           throw err;
         }
-        console.warn('PostgreSQL deleteProject failed, falling back to local storage engine:', err.message);
-        pgDisabled = true;
+        handlePgError('deleteProject', err);
       }
     }
 

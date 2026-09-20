@@ -2,11 +2,11 @@ import express from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
-dotenv.config();
+dotenv.config({ override: true });
 
 import { VideoGenerationService } from './src/services/videoGeneration';
 import { GoogleGenAI } from '@google/genai';
-import { DatabaseService, DbUser } from './server/db';
+import { DatabaseService, DbUser, getPgPool } from './server/db';
 import { AuthService, requireAuth, requireAdmin, AuthenticatedRequest } from './server/auth';
 
 const app = express();
@@ -16,18 +16,26 @@ app.use(cookieParser());
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-// Normalize URLs for serverless rewrites (e.g., if /api prefix is stripped or retained)
+// Normalize URLs for serverless rewrites (e.g., if /api prefix is stripped or retained by Vercel)
 app.use((req, res, next) => {
-  const url = req.url || '';
-  if (!url.startsWith('/api') && (
-    url.startsWith('/auth') ||
-    url.startsWith('/projects') ||
-    url.startsWith('/admin') ||
-    url.startsWith('/video') ||
-    url.startsWith('/ai') ||
-    url.startsWith('/health')
-  )) {
-    req.url = '/api' + url;
+  const matchedPath = (req.headers['x-matched-path'] as string) || 
+                      (req.headers['x-vercel-matched-path'] as string) ||
+                      (req.headers['x-forwarded-uri'] as string);
+
+  if (matchedPath && matchedPath.startsWith('/api') && (!req.url || req.url === '/' || req.url === '/api' || !req.url.startsWith('/api'))) {
+    req.url = matchedPath;
+  } else {
+    const url = req.url || '';
+    if (!url.startsWith('/api') && (
+      url.startsWith('/auth') ||
+      url.startsWith('/projects') ||
+      url.startsWith('/admin') ||
+      url.startsWith('/video') ||
+      url.startsWith('/ai') ||
+      url.startsWith('/health')
+    )) {
+      req.url = '/api' + url;
+    }
   }
   next();
 });
@@ -95,9 +103,25 @@ async function generateGeminiContentWithFallback(
 }
 
 // System Status & Health
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
   const hasGemini = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY');
   const hasGoogleOAuth = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_ID.trim() !== '');
+  const hasDb = Boolean(process.env.DATABASE_URL);
+  const isNeon = Boolean(process.env.DATABASE_URL && process.env.DATABASE_URL.includes('neon'));
+  let dbActive = false;
+
+  if (hasDb) {
+    try {
+      const pool = getPgPool();
+      if (pool) {
+        await pool.query('SELECT 1');
+        dbActive = true;
+      }
+    } catch {
+      dbActive = false;
+    }
+  }
+
   res.json({
     status: 'ok',
     appName: 'Kiran AI Video Studio',
@@ -105,7 +129,9 @@ app.get('/api/health', (req, res) => {
     features: {
       geminiServerSide: hasGemini,
       googleOAuth: hasGoogleOAuth,
-      storageService: 'Modular Cloud & Local Storage'
+      storageService: hasDb ? (isNeon ? 'Neon Serverless PostgreSQL' : 'PostgreSQL Cloud Database') : 'Modular Storage Engine',
+      databaseConnected: dbActive,
+      databaseProvider: hasDb ? (isNeon ? 'Neon AWS (ap-southeast-1)' : 'PostgreSQL') : 'Local Storage Engine'
     }
   });
 });
@@ -1033,8 +1059,17 @@ async function startServer() {
   });
 }
 
-// Auto-start server in standalone Node or Cloud Run container
-if (process.env.VERCEL !== '1' && process.env.NODE_ENV !== 'test') {
+// Auto-start server in standalone Node or Cloud Run container, never in Vercel or serverless functions
+const isServerless = Boolean(
+  process.env.VERCEL ||
+  process.env.VERCEL_ENV ||
+  process.env.NOW_REGION ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  process.env.LAMBDA_TASK_ROOT ||
+  process.env.SERVERLESS
+);
+
+if (!isServerless && process.env.NODE_ENV !== 'test') {
   startServer();
 }
 
