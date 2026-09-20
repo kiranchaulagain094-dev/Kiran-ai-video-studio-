@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { AuthApiClient, SafeUser, formatErrorMessage } from '../lib/authClient';
+import { AuthApiClient, SafeUser } from '../lib/authClient';
 
 interface AuthContextType {
   currentUser: SafeUser | null;
@@ -13,14 +13,22 @@ interface AuthContextType {
   logout: () => Promise<void>;
 }
 
+const DEFAULT_CREATOR: SafeUser = {
+  id: 'usr_studio_creator',
+  username: 'Kiran Studio Creator',
+  role: 'admin',
+  createdAt: '2026-01-01T00:00:00Z',
+  avatar: 'https://ui-avatars.com/api/?name=Kiran+Studio&background=6366f1&color=fff'
+};
+
 const AuthContext = createContext<AuthContextType>({
-  currentUser: null,
-  isAdmin: false,
-  isLoading: true,
+  currentUser: DEFAULT_CREATOR,
+  isAdmin: true,
+  isLoading: false,
   authError: null,
   clearAuthError: () => {},
-  login: async () => { throw new Error('AuthContext not initialized'); },
-  register: async () => { throw new Error('AuthContext not initialized'); },
+  login: async () => DEFAULT_CREATOR,
+  register: async () => DEFAULT_CREATOR,
   signOut: async () => {},
   logout: async () => {},
 });
@@ -28,86 +36,34 @@ const AuthContext = createContext<AuthContextType>({
 export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<SafeUser | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState<SafeUser | null>(DEFAULT_CREATOR);
+  const [isAdmin, setIsAdmin] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // Initialize session on mount using HttpOnly cookie or in-memory session token
   useEffect(() => {
+    // Optionally sync with backend session if available, otherwise keep default creator
     let isMounted = true;
-
-    async function loadSession() {
+    async function checkBackend() {
       try {
         const user = await AuthApiClient.getSession();
-        if (isMounted) {
-          if (user) {
-            setCurrentUser(user);
-            setIsAdmin(user.role === 'admin');
-          } else {
-            setCurrentUser(null);
-            setIsAdmin(false);
-          }
+        if (isMounted && user) {
+          setCurrentUser(user);
+          setIsAdmin(user.role === 'admin');
         }
-      } catch (err: any) {
-        if (isMounted) {
-          setCurrentUser(null);
-          setIsAdmin(false);
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
+      } catch {
+        // Fallback remains DEFAULT_CREATOR
       }
     }
-
-    loadSession();
-
+    checkBackend();
     return () => {
       isMounted = false;
     };
   }, []);
 
-  const handleLogin = async (username: string, password: string): Promise<SafeUser> => {
-    setAuthError(null);
-    try {
-      const user = await AuthApiClient.login(username, password);
-      setCurrentUser(user);
-      setIsAdmin(user.role === 'admin');
-      return user;
-    } catch (err: any) {
-      const msg = formatErrorMessage(err, 'Invalid username or password.');
-      setAuthError(msg);
-      throw new Error(msg);
-    }
-  };
-
-  const handleRegister = async (username: string, password: string): Promise<SafeUser> => {
-    setAuthError(null);
-    try {
-      const user = await AuthApiClient.register(username, password);
-      setCurrentUser(user);
-      setIsAdmin(user.role === 'admin');
-      return user;
-    } catch (err: any) {
-      const msg = formatErrorMessage(err, 'Unable to create account. Please try again.');
-      setAuthError(msg);
-      throw new Error(msg);
-    }
-  };
-
-  const handleSignOut = async () => {
-    try {
-      await AuthApiClient.logout();
-    } catch (err) {
-      console.error('Logout error:', err);
-    } finally {
-      setCurrentUser(null);
-      setIsAdmin(false);
-      setAuthError(null);
-    }
-  };
-
+  const handleLogin = async (): Promise<SafeUser> => DEFAULT_CREATOR;
+  const handleRegister = async (): Promise<SafeUser> => DEFAULT_CREATOR;
+  const handleSignOut = async () => {};
   const clearAuthError = () => setAuthError(null);
 
   return (
@@ -126,3 +82,4 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     </AuthContext.Provider>
   );
 };
+

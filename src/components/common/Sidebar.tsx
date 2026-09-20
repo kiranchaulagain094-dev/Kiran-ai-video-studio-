@@ -12,7 +12,9 @@ import {
   Settings, 
   ShieldCheck,
   Zap,
-  HelpCircle
+  HelpCircle,
+  FileText,
+  Mail
 } from 'lucide-react';
 import { UserProfile } from '../../types';
 
@@ -130,6 +132,66 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </button>
             </div>
           )}
+
+          {/* Legal & Policy Direct Navigation */}
+          <div className="pt-3 mt-3 border-t border-white/5">
+            <div className="px-3 py-1">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Policies & Support</p>
+            </div>
+            <button
+              id="sidebar-nav-privacy"
+              onClick={() => {
+                onNavigate('privacy-policy');
+                onClose();
+              }}
+              className={`
+                w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all group
+                ${currentRoute === 'privacy-policy' 
+                  ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30' 
+                  : 'text-slate-400 hover:text-white hover:bg-[#141824] border border-transparent'
+                }
+              `}
+            >
+              <ShieldCheck className="w-4 h-4 text-slate-400 group-hover:text-white" />
+              <span>Privacy Policy</span>
+            </button>
+
+            <button
+              id="sidebar-nav-terms"
+              onClick={() => {
+                onNavigate('terms-of-service');
+                onClose();
+              }}
+              className={`
+                w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all group
+                ${currentRoute === 'terms-of-service' 
+                  ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30' 
+                  : 'text-slate-400 hover:text-white hover:bg-[#141824] border border-transparent'
+                }
+              `}
+            >
+              <FileText className="w-4 h-4 text-slate-400 group-hover:text-white" />
+              <span>Terms of Service</span>
+            </button>
+
+            <button
+              id="sidebar-nav-contact"
+              onClick={() => {
+                onNavigate('contact-us');
+                onClose();
+              }}
+              className={`
+                w-full flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all group
+                ${currentRoute === 'contact-us' 
+                  ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30' 
+                  : 'text-slate-400 hover:text-white hover:bg-[#141824] border border-transparent'
+                }
+              `}
+            >
+              <Mail className="w-4 h-4 text-slate-400 group-hover:text-white" />
+              <span>Contact Us</span>
+            </button>
+          </div>
         </div>
 
         {/* Bottom studio card */}

@@ -14,8 +14,9 @@ import {
   SlidersHorizontal,
   Youtube,
   Cpu,
-  LogIn
+  LayoutDashboard
 } from 'lucide-react';
+import { Footer } from '../common/Footer';
 
 interface LandingPageProps {
   onStartCreating: () => void;
@@ -129,8 +130,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             onClick={onOpenLogin}
             className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-[#141824] hover:bg-[#1c2233] text-white font-semibold text-sm border border-white/10 flex items-center justify-center gap-2.5 transition-all active:scale-95 cursor-pointer"
           >
-            <LogIn className="w-4 h-4 text-indigo-400" />
-            <span>Sign In / Register</span>
+            <LayoutDashboard className="w-4 h-4 text-indigo-400" />
+            <span>Open Studio Dashboard</span>
           </button>
         </div>
 
@@ -287,12 +288,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="mt-auto py-8 px-4 border-t border-white/5 text-center text-xs text-slate-500">
-        <p className="font-semibold text-slate-400">Kiran AI Video Studio</p>
-        <p className="mt-1">Create • Edit • Optimize • Publish</p>
-        <p className="mt-3 text-[11px]">© 2026 Kiran AI Video Studio. All rights reserved.</p>
-      </footer>
+      {/* Complete Legal, Tools & Support Footer */}
+      <Footer onNavigate={onSelectFeature} currentRoute="landing" />
     </div>
   );
 };

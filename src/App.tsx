@@ -12,12 +12,15 @@ import { ThumbnailMaker } from './components/thumbnail/ThumbnailMaker';
 import { ProjectsManager } from './components/projects/ProjectsManager';
 import { TemplatesLibrary } from './components/templates/TemplatesLibrary';
 import { AdminPanel } from './components/admin/AdminPanel';
-import { AuthModal } from './components/auth/AuthModal';
-import { WelcomeLoginPage } from './components/auth/WelcomeLoginPage';
-import { AuthLoadingScreen } from './components/auth/AuthLoadingScreen';
 import { MusicVideoPlanner } from './components/music/MusicVideoPlanner';
 import { VideoGenerationComingSoon } from './components/generator/VideoGenerationComingSoon';
-import { Project, UserProfile, Announcement, User } from './types';
+import { Footer } from './components/common/Footer';
+import { PrivacyPolicy } from './components/legal/PrivacyPolicy';
+import { TermsOfService } from './components/legal/TermsOfService';
+import { CookiePolicy } from './components/legal/CookiePolicy';
+import { Disclaimer } from './components/legal/Disclaimer';
+import { ContactUs } from './components/legal/ContactUs';
+import { Project, UserProfile, Announcement } from './types';
 import { useAuth } from './context/AuthContext';
 import { StudioApiService } from './services/api';
 import { ShieldAlert, AlertTriangle, DownloadCloud, Settings as SettingsIcon, ShieldCheck, CheckCircle2, HardDrive, Sparkles, Film, Sliders, ExternalLink, Music } from 'lucide-react';
@@ -25,11 +28,10 @@ import { ShieldAlert, AlertTriangle, DownloadCloud, Settings as SettingsIcon, Sh
 // SPA Route Path Mapping for Firebase Hosting & browser URL history
 const pathToRoute = (pathname: string): string => {
   const clean = pathname.toLowerCase().replace(/^\/+|\/+$/g, '');
-  if (!clean || clean === 'dashboard') return 'dashboard';
+  if (!clean || clean === 'dashboard' || clean === 'login' || clean === 'signin') return 'dashboard';
   if (clean === 'admin') return 'admin';
   if (clean === 'projects' || clean === 'project') return 'projects';
   if (clean === 'settings' || clean === 'setting') return 'settings';
-  if (clean === 'login' || clean === 'signin') return 'login';
   if (clean === 'video-generator' || clean === 'generator' || clean === 'generate') return 'video-generator';
   if (clean === 'shorts-creator' || clean === 'shorts') return 'shorts-creator';
   if (clean === 'video-editor' || clean === 'editor') return 'video-editor';
@@ -38,6 +40,12 @@ const pathToRoute = (pathname: string): string => {
   if (clean === 'templates' || clean === 'template') return 'templates';
   if (clean === 'music-video' || clean === 'music') return 'music-video';
   if (clean === 'exports' || clean === 'export') return 'exports';
+  if (clean === 'privacy-policy' || clean === 'privacy') return 'privacy-policy';
+  if (clean === 'terms-of-service' || clean === 'terms') return 'terms-of-service';
+  if (clean === 'cookie-policy' || clean === 'cookies' || clean === 'cookie') return 'cookie-policy';
+  if (clean === 'disclaimer') return 'disclaimer';
+  if (clean === 'contact-us' || clean === 'contact') return 'contact-us';
+  if (clean === 'landing') return 'landing';
   return 'dashboard';
 };
 
@@ -58,7 +66,6 @@ export default function App() {
     return 'dashboard';
   });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   // Keep browser address bar synchronized with SPA navigation
   const navigateTo = (route: string, replace = false) => {
@@ -86,52 +93,37 @@ export default function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Authenticated Creator User Profile state
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  // Authenticated Creator User Profile state (direct open access)
+  const [currentUser, setCurrentUser] = useState<UserProfile>({
+    id: 'usr_studio_creator',
+    name: 'Kiran Studio Creator',
+    email: 'creator@kiranaistudio.com',
+    avatar: 'https://ui-avatars.com/api/?name=Kiran+Studio&background=6366f1&color=fff',
+    role: 'Admin',
+    plan: 'Pro Unlimited',
+    status: 'active',
+    createdAt: '2026-01-01T00:00:00Z',
+    projectsCount: 14,
+    generationsCount: 52,
+    storageUsedMB: 1240
+  });
 
   // Projects & Announcements data
   const [projects, setProjects] = useState<Project[]>(StudioApiService.getProjects());
   const [announcements, setAnnouncements] = useState<Announcement[]>(StudioApiService.getAnnouncements());
   const [currentEditingProject, setCurrentEditingProject] = useState<Project | null>(null);
 
-  // Synchronize authenticated user profile and fetch user-isolated projects
+  // Synchronize projects from database/server on mount
   useEffect(() => {
-    if (sessionUser) {
-      StudioApiService.fetchProjectsFromServer().then(freshProjects => {
+    StudioApiService.fetchProjectsFromServer().then(freshProjects => {
+      if (freshProjects && freshProjects.length > 0) {
         setProjects(freshProjects);
-      });
-      setCurrentUser({
-        id: sessionUser.id,
-        name: sessionUser.username,
-        email: `${sessionUser.username}@studio.local`,
-        avatar: sessionUser.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(sessionUser.username)}&background=6366f1&color=fff`,
-        role: isAdmin ? 'Admin' : 'User',
-        plan: 'Pro',
-        status: 'active',
-        createdAt: sessionUser.createdAt || new Date().toISOString(),
-        projectsCount: projects.filter(p => p.userId === sessionUser.id).length,
-        generationsCount: 48,
-        storageUsedMB: 1240
-      });
-      // If user was on login or landing, route to dashboard or preserve the requested deep link
-      if (currentRoute === 'landing' || currentRoute === 'login') {
-        const deepRoute = pathToRoute(window.location.pathname);
-        if (deepRoute && deepRoute !== 'login' && deepRoute !== 'landing') {
-          navigateTo(deepRoute, true);
-        } else {
-          navigateTo('dashboard', true);
-        }
       }
-    } else {
-      setCurrentUser(null);
-      setProjects([]);
-    }
-  }, [sessionUser, isAdmin]);
+    });
+  }, []);
 
-  // User-isolated projects: Admins see all, standard creators see ONLY projects matching their immutable user ID
-  const userProjects = (isAdmin || currentUser?.role === 'Admin')
-    ? projects
-    : projects.filter(p => p.userId === sessionUser?.id);
+  // All creator projects are directly accessible
+  const userProjects = projects;
 
   // Cross-component prompt passing
   const [initialGeneratorPrompt, setInitialGeneratorPrompt] = useState<string>('');
@@ -165,29 +157,9 @@ export default function App() {
     }
   };
 
-  const handleLogout = async () => {
-    try {
-      await signOut();
-    } catch (err) {
-      console.error('Logout error', err);
-    }
-    setCurrentUser(null);
-    setProjects([]);
-    try {
-      localStorage.removeItem('kiran_studio_projects');
-      localStorage.removeItem('kiran_studio_current_user');
-    } catch {}
-    navigateTo('login');
-  };
-
-  const handleLoginSuccess = () => {
-    setIsAuthModalOpen(false);
-    const deepRoute = pathToRoute(window.location.pathname);
-    if (deepRoute && deepRoute !== 'login' && deepRoute !== 'landing') {
-      navigateTo(deepRoute, true);
-    } else {
-      navigateTo('dashboard', true);
-    }
+  const handleLogout = () => {
+    refreshProjects();
+    navigateTo('dashboard');
   };
 
   const handleUseTemplate = (template: any) => {
@@ -210,30 +182,13 @@ export default function App() {
     if (proj) {
       setCurrentEditingProject(proj);
       navigateTo('video-editor');
-    } else {
-      console.warn('Unauthorized or project not found for current user');
     }
   };
-
-  // MANDATORY AUTHENTICATION GUARDS
-  // 1. If auth session is loading, show clean loading screen
-  if (isLoading) {
-    return <AuthLoadingScreen />;
-  }
-
-  // 2. If user is NOT signed in, render full-screen Welcome/Login page only
-  // Absolutely no access to dashboard or protected features without custom sign-in
-  if (!sessionUser) {
-    return (
-      <WelcomeLoginPage 
-        onLoginSuccess={handleLoginSuccess}
-      />
-    );
-  }
 
   // Check maintenance mode
   const adminStats = StudioApiService.getAdminStats();
   const isMaintenanceActive = adminStats.maintenanceMode && !isAdmin;
+  const isLegalRoute = ['privacy-policy', 'terms-of-service', 'cookie-policy', 'disclaimer', 'contact-us'].includes(currentRoute);
 
   return (
     <div className="min-h-screen bg-[#090b10] text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
@@ -249,7 +204,7 @@ export default function App() {
       <Header
         currentUser={currentUser}
         isAdmin={isAdmin}
-        onOpenAuth={() => setIsAuthModalOpen(true)}
+        onOpenAuth={() => {}}
         onLogout={handleLogout}
         onSwitchUserRole={handleSwitchUserRole}
         onNavigate={(route) => {
@@ -281,14 +236,11 @@ export default function App() {
         )}
 
         {/* Main Content Viewport */}
-        <main className={`flex-1 overflow-y-auto ${currentRoute === 'landing' ? 'p-0' : 'md:ml-64 p-4 sm:p-6 lg:p-8 pb-24 md:pb-12'}`}>
+        <main className={`flex-1 overflow-y-auto ${currentRoute === 'landing' || isLegalRoute ? 'md:ml-64 p-0' : 'md:ml-64 p-4 sm:p-6 lg:p-8 pb-24 md:pb-12'}`}>
           {currentRoute === 'landing' && (
             <LandingPage
-              onStartCreating={() => {
-                if (!currentUser) setIsAuthModalOpen(true);
-                else navigateTo('video-generator');
-              }}
-              onOpenLogin={() => setIsAuthModalOpen(true)}
+              onStartCreating={() => navigateTo('video-generator')}
+              onOpenLogin={() => navigateTo('dashboard')}
               onSelectFeature={(featureRoute) => {
                 navigateTo(featureRoute);
               }}
@@ -785,6 +737,36 @@ export default function App() {
             </div>
           )}
 
+          {/* Legal & Policy Pages */}
+          {currentRoute === 'privacy-policy' && (
+            <PrivacyPolicy onNavigate={navigateTo} />
+          )}
+
+          {currentRoute === 'terms-of-service' && (
+            <TermsOfService onNavigate={navigateTo} />
+          )}
+
+          {currentRoute === 'cookie-policy' && (
+            <CookiePolicy onNavigate={navigateTo} />
+          )}
+
+          {currentRoute === 'disclaimer' && (
+            <Disclaimer onNavigate={navigateTo} />
+          )}
+
+          {currentRoute === 'contact-us' && (
+            <ContactUs onNavigate={navigateTo} />
+          )}
+
+          {/* Universal Website Footer with Policy Links */}
+          {currentRoute !== 'landing' && (
+            <Footer 
+              onNavigate={navigateTo} 
+              currentRoute={currentRoute} 
+              className={isLegalRoute ? 'mt-0 border-t-0' : 'mt-12'} 
+            />
+          )}
+
         </main>
       </div>
 
@@ -795,13 +777,6 @@ export default function App() {
           onNavigate={(route) => navigateTo(route)}
         />
       )}
-
-      {/* Auth Modal with Username/Password Authentication */}
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        onLoginSuccess={handleLoginSuccess}
-      />
     </div>
   );
 }

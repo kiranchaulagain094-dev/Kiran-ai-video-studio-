@@ -246,10 +246,10 @@ export const Header: React.FC<HeaderProps> = ({
                           onLogout();
                           setShowProfileMenu(false);
                         }}
-                        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium text-indigo-300 hover:bg-indigo-500/10 transition-colors cursor-pointer"
                       >
-                        <LogOut className="w-4 h-4 text-rose-400" />
-                        Sign Out
+                        <Sparkles className="w-4 h-4 text-indigo-400" />
+                        Reset Workspace View
                       </button>
                     </div>
                   </div>
@@ -258,12 +258,9 @@ export const Header: React.FC<HeaderProps> = ({
             </>
           ) : (
             <div className="flex items-center gap-2">
-              <button
-                onClick={onOpenAuth}
-                className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 via-violet-600 to-cyan-500 hover:from-indigo-500 hover:to-cyan-400 text-white text-xs font-semibold shadow-md shadow-indigo-500/20 transition-all active:scale-95 cursor-pointer"
-              >
-                Sign In
-              </button>
+              <span className="px-3 py-1.5 rounded-xl bg-indigo-600/20 border border-indigo-500/30 text-indigo-300 text-xs font-semibold">
+                Studio Creator Mode
+              </span>
             </div>
           )}
         </div>
