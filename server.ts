@@ -711,7 +711,7 @@ app.post('/api/auth/login', async (req, res) => {
     const { username, password } = req.body;
 
     if (!username || !password || typeof username !== 'string' || typeof password !== 'string') {
-      return res.status(400).json({ error: 'Username and password are required.' });
+      return res.status(400).json({ success: false, error: 'Username and password are required.' });
     }
 
     const trimmedUsername = username.trim();
@@ -722,6 +722,7 @@ app.post('/api/auth/login', async (req, res) => {
     const rateCheck = DatabaseService.checkRateLimit(rateLimitKey);
     if (!rateCheck.allowed) {
       return res.status(429).json({
+        success: false,
         error: `Too many failed login attempts. Please try again in ${rateCheck.remainingMinutes || 15} minutes.`
       });
     }
@@ -733,19 +734,19 @@ app.post('/api/auth/login', async (req, res) => {
     if (!user) {
       DatabaseService.recordFailedAttempt(rateLimitKey);
       await AuthService.verifyPassword('dummy_password_timing', '$2a$12$e8Y/3O8m1a6ZJkRkQz3ywe0NnCqvK2uYw4p6vL6Kk6w4w4w4w4w4e');
-      return res.status(401).json({ error: 'Invalid username or password.' });
+      return res.status(401).json({ success: false, error: 'Invalid username or password.' });
     }
 
     // Verify bcrypt password hash
     const isValid = await AuthService.verifyPassword(password, user.passwordHash);
     if (!isValid) {
       DatabaseService.recordFailedAttempt(rateLimitKey);
-      return res.status(401).json({ error: 'Invalid username or password.' });
+      return res.status(401).json({ success: false, error: 'Invalid username or password.' });
     }
 
     // Check if account is suspended
     if (user.status === 'suspended') {
-      return res.status(403).json({ error: 'Your account has been suspended. Please contact administrator.' });
+      return res.status(403).json({ success: false, error: 'Your account has been suspended. Please contact administrator.' });
     }
 
     // Reset rate limit on successful authentication
@@ -772,7 +773,7 @@ app.post('/api/auth/login', async (req, res) => {
     });
   } catch (err: any) {
     console.error('Login error:', err);
-    return res.status(500).json({ error: 'Login failed. Please try again.' });
+    return res.status(500).json({ success: false, error: 'Login failed. Please try again.' });
   }
 });
 

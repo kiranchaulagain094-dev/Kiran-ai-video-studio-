@@ -49,6 +49,16 @@
       "createdAt": "2026-09-19T14:26:28.748Z",
       "avatar": "https://ui-avatars.com/api/?name=creator_b_1789827986991&background=6366f1&color=fff",
       "status": "active"
+    },
+    {
+      "id": "usr_615ecb8f1dfe4cdf98f5429a85d435cd",
+      "username": "testcreator",
+      "displayUsername": "testcreator",
+      "passwordHash": "$2b$12$skr37cud2tid/gARC5bP0OpHnVXYBCIkI37N.Mu8GfCPhJkHA7Ixy",
+      "role": "user",
+      "createdAt": "2026-09-20T11:19:18.691Z",
+      "avatar": "https://ui-avatars.com/api/?name=testcreator&background=6366f1&color=fff",
+      "status": "active"
     }
   ],
   "projects": [
