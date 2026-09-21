@@ -18,7 +18,7 @@ interface PrivacyPolicyProps {
 }
 
 export const PrivacyPolicy: React.FC<PrivacyPolicyProps> = ({ onNavigate }) => {
-  const contactEmail = 'contact@kiranvideostudio.com';
+  const contactEmail = 'kiranchaulagain094@gmail.com';
 
   return (
     <LegalLayout
@@ -274,7 +274,7 @@ export const PrivacyPolicy: React.FC<PrivacyPolicyProps> = ({ onNavigate }) => {
           </button>
         </div>
         <p className="text-[11px] text-slate-400">
-          Note: This placeholder contact address is monitored for support and policy inquiries and can be customized in application settings.
+          Note: This direct contact address is monitored for creator support, privacy requests, and policy inquiries.
         </p>
       </section>
     </LegalLayout>

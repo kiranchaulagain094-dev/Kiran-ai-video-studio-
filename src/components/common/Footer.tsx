@@ -25,11 +25,11 @@ interface FooterProps {
 
 export const Footer: React.FC<FooterProps> = ({ onNavigate, currentRoute, className = '' }) => {
   const [copied, setCopied] = useState(false);
-  const placeholderEmail = 'contact@kiranvideostudio.com';
+  const contactEmail = 'kiranchaulagain094@gmail.com';
 
   const handleCopyEmail = (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(placeholderEmail);
+    navigator.clipboard.writeText(contactEmail);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -218,18 +218,18 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate, currentRoute, classN
               Have questions regarding policies, tool features, or feedback? Reach out directly.
             </p>
             
-            {/* Configurable placeholder email box */}
+            {/* Direct contact email box */}
             <div className="p-2.5 rounded-xl bg-[#121622] border border-white/10 space-y-1.5">
               <span className="text-[10px] font-semibold text-slate-400 block uppercase tracking-wider">
-                Support Email (Configurable)
+                Direct Contact Email
               </span>
               <div className="flex items-center justify-between gap-1">
                 <a 
-                  href={`mailto:${placeholderEmail}`} 
+                  href={`mailto:${contactEmail}`} 
                   className="text-xs font-mono text-indigo-300 hover:text-indigo-200 truncate"
-                  title="Click to email"
+                  title="Click to email kiranchaulagain094@gmail.com"
                 >
-                  {placeholderEmail}
+                  {contactEmail}
                 </a>
                 <button
                   onClick={handleCopyEmail}

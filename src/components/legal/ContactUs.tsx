@@ -21,8 +21,8 @@ interface ContactUsProps {
 }
 
 export const ContactUs: React.FC<ContactUsProps> = ({ onNavigate }) => {
-  const primaryEmail = 'contact@kiranvideostudio.com';
-  const supportEmail = 'support@kiranvideostudio.com';
+  const primaryEmail = 'kiranchaulagain094@gmail.com';
+  const supportEmail = 'kiranchaulagain094@gmail.com';
 
   const [copied, setCopied] = useState<string | null>(null);
   const [formData, setFormData] = useState({
@@ -83,7 +83,7 @@ export const ContactUs: React.FC<ContactUsProps> = ({ onNavigate }) => {
     },
     {
       q: 'Who can I contact regarding Privacy Policy or DMCA questions?',
-      a: 'Use the contact form below or email us directly at contact@kiranvideostudio.com with "Policy / DMCA" in the subject line for prompt handling.'
+      a: 'Use the contact form below or email us directly at kiranchaulagain094@gmail.com with "Policy / DMCA" in the subject line for prompt handling.'
     }
   ];
 
@@ -182,9 +182,9 @@ export const ContactUs: React.FC<ContactUsProps> = ({ onNavigate }) => {
           </div>
 
           <div className="p-2.5 rounded-xl bg-[#161b29] border border-white/5">
-            <span className="text-[10px] text-indigo-300 font-semibold block">Configurable Placeholder Notice</span>
+            <span className="text-[10px] text-emerald-400 font-semibold block">Official Studio Contact</span>
             <span className="text-[11px] text-slate-400">
-              The contact emails above serve as default placeholders and can be customized to any custom business email address in your project settings.
+              For direct business inquiries, copyright, and creator support: <a href="mailto:kiranchaulagain094@gmail.com" className="text-indigo-300 font-mono underline hover:text-white">kiranchaulagain094@gmail.com</a>
             </span>
           </div>
         </div>
