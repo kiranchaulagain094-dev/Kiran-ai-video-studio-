@@ -14,7 +14,8 @@ import {
   Video,
   Film,
   Scissors,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Compass
 } from 'lucide-react';
 
 interface FooterProps {
@@ -88,9 +89,57 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate, currentRoute, classN
           <div className="space-y-3">
             <p className="text-xs font-bold uppercase tracking-wider text-white flex items-center gap-1.5">
               <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Legal & Policies</span>
+              <span>Guides & Policies</span>
             </p>
             <ul className="space-y-2 text-xs">
+              <li>
+                <button
+                  id="footer-link-how-to-use"
+                  onClick={() => onNavigate('how-to-use')}
+                  className={`hover:text-white transition-colors flex items-center gap-1.5 text-left ${
+                    currentRoute === 'how-to-use' ? 'text-indigo-400 font-bold' : 'text-slate-400'
+                  }`}
+                >
+                  <Sparkles className="w-3.5 h-3.5 shrink-0 text-slate-500" />
+                  <span>How to Use Studio</span>
+                </button>
+              </li>
+              <li>
+                <button
+                  id="footer-link-ai-tools-guide"
+                  onClick={() => onNavigate('ai-tools-guide')}
+                  className={`hover:text-white transition-colors flex items-center gap-1.5 text-left ${
+                    currentRoute === 'ai-tools-guide' ? 'text-indigo-400 font-bold' : 'text-slate-400'
+                  }`}
+                >
+                  <Compass className="w-3.5 h-3.5 shrink-0 text-slate-500" />
+                  <span>AI Tools Guide</span>
+                </button>
+              </li>
+              <li>
+                <button
+                  id="footer-link-faq"
+                  onClick={() => onNavigate('faq')}
+                  className={`hover:text-white transition-colors flex items-center gap-1.5 text-left ${
+                    currentRoute === 'faq' ? 'text-indigo-400 font-bold' : 'text-slate-400'
+                  }`}
+                >
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 text-slate-500" />
+                  <span>FAQ</span>
+                </button>
+              </li>
+              <li>
+                <button
+                  id="footer-link-about-us"
+                  onClick={() => onNavigate('about-us')}
+                  className={`hover:text-white transition-colors flex items-center gap-1.5 text-left ${
+                    currentRoute === 'about-us' ? 'text-indigo-400 font-bold' : 'text-slate-400'
+                  }`}
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-slate-500" />
+                  <span>About Us</span>
+                </button>
+              </li>
               <li>
                 <button
                   id="footer-link-privacy-policy"
@@ -160,6 +209,18 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate, currentRoute, classN
               Studio Tools
             </p>
             <ul className="space-y-2 text-xs">
+              <li>
+                <button
+                  id="footer-link-ai-guide"
+                  onClick={() => onNavigate('ai-guide')}
+                  className={`hover:text-white transition-colors flex items-center gap-1.5 text-left ${
+                    currentRoute === 'ai-guide' ? 'text-indigo-400 font-bold' : 'text-slate-400'
+                  }`}
+                >
+                  <Compass className="w-3.5 h-3.5 shrink-0 text-cyan-400" />
+                  <span className="text-white font-medium">AI Website Guide</span>
+                </button>
+              </li>
               <li>
                 <button
                   onClick={() => onNavigate('video-generator')}
@@ -266,6 +327,30 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate, currentRoute, classN
 
           {/* Direct Visible Legal Links Row */}
           <div className="flex items-center gap-3 sm:gap-4 flex-wrap justify-center font-medium">
+            <button
+              id="footer-inline-how-to-use"
+              onClick={() => onNavigate('how-to-use')}
+              className="hover:text-white transition-colors"
+            >
+              How to Use
+            </button>
+            <span className="text-slate-700">•</span>
+            <button
+              id="footer-inline-faq"
+              onClick={() => onNavigate('faq')}
+              className="hover:text-white transition-colors"
+            >
+              FAQ
+            </button>
+            <span className="text-slate-700">•</span>
+            <button
+              id="footer-inline-about"
+              onClick={() => onNavigate('about-us')}
+              className="hover:text-white transition-colors"
+            >
+              About Us
+            </button>
+            <span className="text-slate-700">•</span>
             <button
               id="footer-inline-privacy"
               onClick={() => onNavigate('privacy-policy')}

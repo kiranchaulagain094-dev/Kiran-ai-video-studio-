@@ -17,7 +17,7 @@ interface DisclaimerProps {
 }
 
 export const Disclaimer: React.FC<DisclaimerProps> = ({ onNavigate }) => {
-  const contactEmail = 'contact@kiranvideostudio.com';
+  const contactEmail = 'kiranchaulagain094@gmail.com';
 
   return (
     <LegalLayout

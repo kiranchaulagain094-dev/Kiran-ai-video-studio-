@@ -225,29 +225,47 @@ export const VideoEditor: React.FC<VideoEditorProps> = ({ project, onSaveProject
     setTimelineItems(items => [...items, dup]);
   };
 
-  const handleStartExport = () => {
+  const handleExportTimelineJSON = () => {
     setIsExporting(true);
-    setExportProgress(0);
-    setExportFinished(false);
-
-    const interval = setInterval(() => {
-      setExportProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setIsExporting(false);
-          setExportFinished(true);
-          if (onSaveProject && project) {
-            onSaveProject({
-              ...project,
-              status: 'Exported',
-              updatedAt: new Date().toISOString()
-            });
-          }
-          return 100;
+    try {
+      const exportPayload = {
+        studio: "Kiran AI Video Studio",
+        version: "2.0.0",
+        exportedAt: new Date().toISOString(),
+        project: {
+          id: project?.id || 'studio-project',
+          name: project?.name || 'Untitled Timeline Project',
+          aspectRatio,
+          duration: Math.max(...timelineItems.map(i => i.start + i.duration), 30),
+          tracks: [
+            { id: 'track-video', name: 'Video Layer 1', items: timelineItems.filter(i => i.type === 'video') },
+            { id: 'track-audio', name: 'Audio Layer 2', items: timelineItems.filter(i => i.type === 'audio') },
+            { id: 'track-text', name: 'Text Overlays 3', items: timelineItems.filter(i => i.type === 'text') }
+          ]
         }
-        return prev + 15;
-      });
-    }, 350);
+      };
+
+      const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(project?.name || 'studio-timeline').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-project.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      setExportFinished(true);
+      if (onSaveProject && project) {
+        onSaveProject({
+          ...project,
+          status: 'Exported',
+          updatedAt: new Date().toISOString()
+        });
+      }
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const formatTime = (seconds: number) => {
@@ -824,99 +842,68 @@ export const VideoEditor: React.FC<VideoEditorProps> = ({ project, onSaveProject
             <div className="flex items-center justify-between pb-3 border-b border-white/5">
               <div className="flex items-center gap-2">
                 <DownloadCloud className="w-5 h-5 text-indigo-400" />
-                <h3 className="text-base font-bold text-white">Export Studio Video</h3>
+                <h3 className="text-base font-bold text-white">Export Project Timeline</h3>
               </div>
-              <button onClick={() => setShowExportModal(false)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setShowExportModal(false)} className="text-slate-400 hover:text-white p-1">
                 ✕
               </button>
             </div>
 
             {!exportFinished ? (
-              <>
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-2">
-                    Select Target Resolution
-                  </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(['720p', '1080p', '4K'] as ('720p' | '1080p' | '4K')[]).map((res) => (
-                      <button
-                        key={res}
-                        type="button"
-                        onClick={() => setExportResolution(res)}
-                        className={`py-3 rounded-xl text-xs font-bold border transition-all ${
-                          exportResolution === res
-                            ? 'bg-indigo-600 text-white border-indigo-400 shadow-md shadow-indigo-600/30'
-                            : 'bg-[#181d2a] text-slate-300 border-white/5 hover:border-white/20'
-                        }`}
-                      >
-                        {res}
-                        <span className="block text-[9px] font-normal text-slate-400 mt-0.5">
-                          {res === '4K' ? 'High Bitrate' : res === '1080p' ? 'Full HD 60fps' : 'Web Ready'}
-                        </span>
-                      </button>
-                    ))}
+              <div className="space-y-4">
+                {/* Real JSON Project Export */}
+                <div className="p-4 rounded-2xl bg-[#171c2b] border border-white/10 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-white uppercase tracking-wider">
+                      Timeline Sequence (.JSON)
+                    </span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-semibold">
+                      Production Ready
+                    </span>
                   </div>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-[#171c2b] border border-white/5 text-xs space-y-1.5">
-                  <div className="flex justify-between text-slate-400">
-                    <span>Format:</span>
-                    <strong className="text-white">MP4 (H.264 / AAC)</strong>
-                  </div>
-                  <div className="flex justify-between text-slate-400">
-                    <span>Aspect Ratio:</span>
-                    <strong className="text-white">{aspectRatio}</strong>
-                  </div>
-                  <div className="flex justify-between text-slate-400">
-                    <span>Estimated Render Time:</span>
-                    <strong className="text-indigo-400 font-mono">~18 seconds</strong>
-                  </div>
-                </div>
-
-                {isExporting ? (
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-xs text-slate-300 font-medium">
-                      <span>Encoding frames...</span>
-                      <span className="font-mono text-indigo-400">{exportProgress}%</span>
-                    </div>
-                    <div className="w-full bg-[#181e2b] rounded-full h-2 overflow-hidden">
-                      <div
-                        className="bg-gradient-to-r from-indigo-500 to-cyan-400 h-full transition-all duration-300"
-                        style={{ width: `${exportProgress}%` }}
-                      />
-                    </div>
-                  </div>
-                ) : (
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Download the structured multi-track configuration, clip timestamps, audio levels, and split positions as a JSON archive.
+                  </p>
                   <button
-                    onClick={handleStartExport}
-                    className="w-full py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-bold text-xs uppercase tracking-wider shadow-lg shadow-indigo-600/30 active:scale-98 transition-all"
+                    onClick={handleExportTimelineJSON}
+                    className="w-full mt-2 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs uppercase tracking-wider shadow-md transition-all flex items-center justify-center gap-2"
                   >
-                    Start Rendering
+                    <DownloadCloud className="w-4 h-4" />
+                    <span>Download Project JSON</span>
                   </button>
-                )}
-              </>
+                </div>
+
+                {/* Honest Video Generation / MP4 Notice */}
+                <div className="p-4 rounded-2xl bg-[#171c2b]/60 border border-amber-500/20 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-amber-300">
+                      Direct MP4 Video Rendering
+                    </span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-semibold">
+                      Coming Soon
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 leading-relaxed">
+                    Video generation tool — Coming Soon. Direct client-side MP4 video rendering is currently in active development. You can export your timeline data above and assemble footage in DaVinci Resolve, Premiere Pro, or CapCut.
+                  </p>
+                </div>
+              </div>
             ) : (
               <div className="text-center py-4 space-y-4">
                 <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto">
                   <CheckCircle2 className="w-6 h-6" />
                 </div>
                 <div>
-                  <h4 className="text-base font-bold text-white">Video Successfully Exported!</h4>
-                  <p className="text-xs text-slate-400 mt-1">Render profile: {exportResolution} MP4</p>
+                  <h4 className="text-base font-bold text-white">Project JSON Exported!</h4>
+                  <p className="text-xs text-slate-400 mt-1">Timeline configuration downloaded to your device.</p>
                 </div>
                 <div className="flex gap-2">
                   <button
                     onClick={() => {
-                      alert('Download started in browser!');
+                      setExportFinished(false);
                       setShowExportModal(false);
                     }}
-                    className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md"
-                  >
-                    Download MP4
-                  </button>
-                  <button
-                    onClick={() => setShowExportModal(false)}
-                    className="px-4 py-2.5 rounded-xl bg-[#171c2b] text-slate-300 hover:text-white text-xs font-semibold"
+                    className="w-full py-2.5 rounded-xl bg-[#171c2b] text-slate-300 hover:text-white text-xs font-semibold"
                   >
                     Close
                   </button>

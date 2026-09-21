@@ -8,11 +8,11 @@ interface BottomNavProps {
 
 export const BottomNav: React.FC<BottomNavProps> = ({ currentRoute, onNavigate }) => {
   const items = [
-    { id: 'dashboard', label: 'Home', icon: LayoutDashboard },
-    { id: 'video-generator', label: 'AI Video', icon: Video },
+    { id: 'landing', label: 'Home', icon: LayoutDashboard },
+    { id: 'video-generator', label: 'Video', icon: Video },
     { id: 'shorts-creator', label: 'Shorts', icon: Film },
     { id: 'video-editor', label: 'Editor', icon: Scissors },
-    { id: 'content-assistant', label: 'AI SEO', icon: Sparkles },
+    { id: 'content-assistant', label: 'SEO', icon: Sparkles },
     { id: 'projects', label: 'Projects', icon: FolderGit2 },
   ];
 

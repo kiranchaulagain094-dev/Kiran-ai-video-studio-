@@ -1,6 +1,6 @@
 {
   "name": "Kiran AI Video Studio",
-  "description": "AI-powered video creation, editing, YouTube content optimization and project management platform. Create. Edit. Optimize. Publish.",
+  "description": "Browser studio for video screenplay planning, vertical Shorts, multi-track editing, and YouTube SEO optimization by Kiran Chaulagain.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

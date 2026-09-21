@@ -17,7 +17,7 @@ interface CookiePolicyProps {
 }
 
 export const CookiePolicy: React.FC<CookiePolicyProps> = ({ onNavigate }) => {
-  const contactEmail = 'contact@kiranvideostudio.com';
+  const contactEmail = 'kiranchaulagain094@gmail.com';
 
   const cookieTypes = [
     {

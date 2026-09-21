@@ -36,22 +36,8 @@ export type MusicOption = 'No Music' | 'AI Background Music' | 'Upload Music';
 
 export type ProjectStatus = 'Draft' | 'Generating' | 'Completed' | 'Failed' | 'Exported';
 
-export interface UserProfile {
-  id: string;
-  email: string;
-  name: string;
-  avatar?: string;
-  role: 'user' | 'admin';
-  plan: 'Free' | 'Pro' | 'Custom';
-  status: 'active' | 'suspended';
-  createdAt: string;
-  projectsCount: number;
-  generationsCount: number;
-  storageUsedMB: number;
-}
-
 export interface VideoScene {
-  id: string;
+  id?: string;
   sceneNumber: number;
   timeRange: string;
   title: string;
@@ -66,7 +52,7 @@ export interface VideoScene {
 
 export interface Project {
   id: string;
-  userId: string;
+  userId?: string;
   name: string;
   type: VideoType;
   aspectRatio: AspectRatio;
@@ -87,8 +73,6 @@ export interface Project {
   tags?: string[];
   scenesCount?: number;
   quality?: string;
-  exportedResolution?: '720p' | '1080p' | '4K';
-  exportedUrl?: string;
 }
 
 export interface TimelineTrackItem {
@@ -133,7 +117,6 @@ export interface AIContentPack {
   tiktokCaption: string;
   facebookCaption: string;
   seoAnalysis: SEOAnalysisResult;
-  // Specialized YouTube mode extras
   pinnedComment?: string;
   communityPost?: string;
 }
@@ -162,7 +145,7 @@ export interface ThumbnailConcept {
   colorPalette: string[];
   badgeText?: string;
   imagePrompt: string;
-  recommendedAspect: '16:9' | '9:16';
+  recommendedAspect?: '16:9' | '9:16';
   style: string;
 }
 
@@ -180,56 +163,6 @@ export interface VideoTemplate {
   status: 'published' | 'draft';
 }
 
-export interface Announcement {
-  id: string;
-  title: string;
-  message: string;
-  type: 'info' | 'update' | 'warning' | 'success';
-  isActive: boolean;
-  startDate: string;
-  endDate: string;
-}
-
-export interface AdminUsageControl {
-  dailyAIGenerations: number;
-  monthlyAIGenerations: number;
-  maxVideoDurationSec: number;
-  maxExportResolution: '720p' | '1080p' | '4K';
-  maxProjectCount: number;
-  storageLimitMB: number;
-  shortsGenerationLimit: number;
-}
-
-export interface User {
-  id: string;
-  name: string;
-  email: string;
-  avatar?: string;
-  role: 'Admin' | 'User';
-  status: 'Active' | 'Suspended';
-  videosGenerated: number;
-  createdAt: string;
-}
-
-export interface AdminStats {
-  totalUsers: number;
-  totalVideosGenerated: number;
-  totalShortsGenerated: number;
-  totalExports: number;
-  apiConnectionStatus: string;
-  maintenanceMode: boolean;
-}
-
-export interface AdminAISettings {
-  aiProvider: 'Google Gemini' | 'OpenAI' | 'Anthropic' | 'Custom';
-  textModel: string;
-  videoGenerationProvider: 'Veo (Google)' | 'Runway Gen-3' | 'Luma Dream Machine' | 'Sora' | 'Mock Modular';
-  imageGenerationProvider: 'Imagen 3' | 'Midjourney' | 'DALL-E 3' | 'Flux';
-  voiceProvider: 'Google Cloud TTS' | 'ElevenLabs' | 'OpenAI TTS';
-  storageProvider: 'Google Cloud Storage' | 'AWS S3' | 'Cloud Storage';
-  apiKeyConfigured: boolean;
-}
-
 export type TemplateCategory =
   | 'Romantic Video'
   | 'Music Video'
@@ -242,25 +175,27 @@ export type TemplateCategory =
   | 'Nepali Folk / Modern Song Concept'
   | 'DJ Remix Visualizer';
 
-export interface ConnectedYouTubeChannel {
+export interface RecommendedTool {
   id: string;
-  channelName: string;
-  handle: string;
-  url: string;
-  shareUrl: string;
-  description: string;
-  avatarUrl: string;
-  bannerUrl?: string;
-  verifiedAdmin: boolean;
-  connectedEmail: string;
-  connectedAt: string;
-  category: string;
-  subscribersCount: string;
-  videosCount: string;
-  status: 'Connected' | 'Active' | 'Syncing';
-  featuredPlaylists?: { title: string; count: number }[];
+  name: string;
+  reason: string;
+  actionText?: string;
 }
 
+export interface AIGuideResponse {
+  userGoal: string;
+  detectedLanguage: string;
+  message: string;
+  recommendedTools: RecommendedTool[];
+}
 
-
+export interface AIGuideChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+  userGoal?: string;
+  recommendedTools?: RecommendedTool[];
+  detectedLanguage?: string;
+}
 

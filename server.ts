@@ -1,22 +1,18 @@
 import express from 'express';
 import path from 'path';
 import dotenv from 'dotenv';
-import cookieParser from 'cookie-parser';
 dotenv.config({ override: true });
 
 import { VideoGenerationService } from './src/services/videoGeneration';
 import { GoogleGenAI } from '@google/genai';
-import { DatabaseService, DbUser, getPgPool } from './server/db';
-import { AuthService, requireAuth, requireAdmin, AuthenticatedRequest } from './server/auth';
 
 const app = express();
 const PORT = 3000;
 
-app.use(cookieParser());
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-// Normalize URLs for serverless rewrites (e.g., if /api prefix is stripped or retained by Vercel)
+// URL normalization
 app.use((req, res, next) => {
   const matchedPath = (req.headers['x-matched-path'] as string) || 
                       (req.headers['x-vercel-matched-path'] as string) ||
@@ -27,9 +23,6 @@ app.use((req, res, next) => {
   } else {
     const url = req.url || '';
     if (!url.startsWith('/api') && (
-      url.startsWith('/auth') ||
-      url.startsWith('/projects') ||
-      url.startsWith('/admin') ||
       url.startsWith('/video') ||
       url.startsWith('/ai') ||
       url.startsWith('/health')
@@ -42,10 +35,10 @@ app.use((req, res, next) => {
 
 // Lazy initialization of Gemini Client
 let geminiClient: GoogleGenAI | null = null;
-function getGeminiClient(): GoogleGenAI {
+function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-    throw new Error('API Key missing or invalid');
+  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey === 'YOUR_GEMINI_API_KEY') {
+    return null;
   }
   if (!geminiClient) {
     geminiClient = new GoogleGenAI({
@@ -66,35 +59,39 @@ async function generateGeminiContentWithFallback(
   prompt: string,
   config?: any
 ): Promise<string> {
-  // In order of speed and availability: gemini-3.8-flash -> gemini-3.1-flash-lite -> gemini-flash-latest
+  // Use approved high-availability Gemini models from @google/genai specification
   const candidateModels = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
   let lastError: any = null;
 
   for (const model of candidateModels) {
-    // Retry on 503/429
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        const response = await ai.models.generateContent({
+        const callPromise = ai.models.generateContent({
           model,
           contents: prompt,
           config: config || {
             responseMimeType: 'application/json'
           }
         });
+        const timeoutPromise = new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error(`Timeout requesting ${model}`)), 9000)
+        );
+
+        const response = await Promise.race([callPromise, timeoutPromise]);
         const text = response.text || '';
         if (text && text.trim().length > 0) {
           return text;
         }
       } catch (err: any) {
         lastError = err;
-        const errMsg = err?.message || String(err);
+        const errMsg = String(err?.message || err);
         const isTransient = errMsg.includes('503') || errMsg.includes('high demand') || errMsg.includes('UNAVAILABLE') || errMsg.includes('429');
-        
         if (isTransient && attempt === 0) {
-          await new Promise((res) => setTimeout(res, 500));
+          // Brief wait on temporary model load spike before retry
+          await new Promise((res) => setTimeout(res, 600));
           continue;
         }
-        break;
+        break; // Advance to next fallback model
       }
     }
   }
@@ -103,73 +100,30 @@ async function generateGeminiContentWithFallback(
 }
 
 // System Status & Health
-app.get('/api/health', async (req, res) => {
-  const hasGemini = Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY');
-  const hasGoogleOAuth = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_ID.trim() !== '');
-  const hasDb = Boolean(process.env.DATABASE_URL);
-  const isNeon = Boolean(process.env.DATABASE_URL && process.env.DATABASE_URL.includes('neon'));
-  let dbActive = false;
-
-  if (hasDb) {
-    try {
-      const pool = getPgPool();
-      if (pool) {
-        await pool.query('SELECT 1');
-        dbActive = true;
-      }
-    } catch {
-      dbActive = false;
-    }
-  }
+app.get('/api/health', (req, res) => {
+  const hasGemini = Boolean(
+    process.env.GEMINI_API_KEY && 
+    process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY' &&
+    process.env.GEMINI_API_KEY !== 'YOUR_GEMINI_API_KEY'
+  );
 
   res.json({
     status: 'ok',
     appName: 'Kiran AI Video Studio',
-    tagline: 'Create. Edit. Optimize. Publish.',
+    operator: 'Kiran Chaulagain',
+    contactEmail: 'kiranchaulagain094@gmail.com',
     features: {
       geminiServerSide: hasGemini,
-      googleOAuth: hasGoogleOAuth,
-      storageService: hasDb ? (isNeon ? 'Neon Serverless PostgreSQL' : 'PostgreSQL Cloud Database') : 'Modular Storage Engine',
-      databaseConnected: dbActive,
-      databaseProvider: hasDb ? (isNeon ? 'Neon AWS (ap-southeast-1)' : 'PostgreSQL') : 'Local Storage Engine'
+      videoPlanner: true,
+      shortsCreator: true,
+      contentAssistant: true,
+      thumbnailMaker: true,
+      musicVideoPlanner: true
     }
   });
 });
 
-// Google OAuth Configuration Status
-app.get('/api/auth/google-status', (req, res) => {
-  const clientId = process.env.GOOGLE_CLIENT_ID || '';
-  const isConfigured = Boolean(clientId && clientId.trim() !== '' && clientId !== 'YOUR_GOOGLE_CLIENT_ID');
-  res.json({
-    configured: isConfigured,
-    clientId: isConfigured ? clientId : null,
-    message: isConfigured 
-      ? 'Google OAuth credentials active.' 
-      : 'Google OAuth Client ID is not yet defined in environment. Fallback seamless creator authentication is active.'
-  });
-});
-
 // AI Video Plan Generation
-
-// Video Generation Job Endpoints
-app.post('/api/video/jobs', async (req, res) => {
-  try {
-    const job = await VideoGenerationService.startJob(req.body);
-    res.json(job);
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-app.get('/api/video/jobs/:id', async (req, res) => {
-  try {
-    const status = await VideoGenerationService.getJobStatus(req.params.id);
-    res.json(status);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 app.post('/api/ai/video-plan', async (req, res) => {
   try {
     const { name, idea, type, aspectRatio, duration, style, voice, language, music } = req.body;
@@ -177,22 +131,22 @@ app.post('/api/ai/video-plan', async (req, res) => {
 
     if (ai) {
       try {
-        const prompt = `You are Kiran AI Video Studio's master video director and screenplay engineer.
-Generate a structured video production plan for:
-Project Name: "${name || 'Untitled Video'}"
-Concept/Idea: "${idea}"
+        const prompt = `You are a professional video director and screenwriter for Kiran AI Video Studio.
+Create a detailed, high-retention video production screenplay and scene breakdown for:
+Project Name: "${name || 'Creative Story'}"
+Core Idea: "${idea}"
 Video Type: "${type || 'YouTube Video'}"
 Aspect Ratio: "${aspectRatio || '16:9'}"
-Duration: "${duration || '60 seconds'}"
+Target Duration: "${duration || '60 seconds'}"
 Visual Style: "${style || 'Cinematic'}"
-Voice: "${voice || 'No Voice'}"
-Language: "${language || 'Nepali'}"
-Music Mood: "${music || 'AI Background Music'}"
+Voiceover Profile: "${voice || 'Male'}"
+Language: "${language || 'English'}"
+Music/Audio Style: "${music || 'AI Background Music'}"
 
 Respond ONLY with valid JSON in this exact structure without markdown backticks:
 {
-  "summary": "Short 2-sentence synopsis",
-  "fullScript": "Voiceover/Dialogue script formatted clearly",
+  "summary": "Brief executive summary of the video production plan",
+  "fullScript": "Complete word-for-word voiceover script with timing brackets",
   "scenes": [
     {
       "sceneNumber": 1,
@@ -214,18 +168,18 @@ Respond ONLY with valid JSON in this exact structure without markdown backticks:
         const parsed = JSON.parse(cleaned);
         return res.json(parsed);
       } catch {
-        // High-retention cinematic studio fallback activates seamlessly
+        // High-retention studio fallback activates seamlessly if API limits are reached
       }
     }
 
-    // High quality programmatic studio fallback
+    // Programmatic fallback
     const isNepali = (language || '').toLowerCase().includes('nepal') || (idea || '').toLowerCase().includes('nepal') || (idea || '').toLowerCase().includes('kathmandu');
     
     const fallbackScenes = [
       {
         sceneNumber: 1,
         timeRange: '0:00 - 0:15',
-        title: 'Opening Hook & Establishing Atmosphere',
+        title: 'Opening Hook & Atmosphere',
         description: isNepali 
           ? 'Atmospheric monsoon rain washing over the ancient brick architecture of Patan or Kathmandu square, soft glowing brass lamps.'
           : 'High-contrast cinematic wide shot setting the mood, subtle volumetric haze, and captivating lighting.',
@@ -241,7 +195,7 @@ Respond ONLY with valid JSON in this exact structure without markdown backticks:
       {
         sceneNumber: 2,
         timeRange: '0:15 - 0:35',
-        title: 'The Unfolding Connection',
+        title: 'The Narrative Core',
         description: isNepali
           ? 'Two pairs of eyes meet under an ornate wooden temple carving while taking shelter from the downpour.'
           : 'Close-up emotional focus on central subjects, shallow depth of field, tender and compelling gaze.',
@@ -271,7 +225,7 @@ Respond ONLY with valid JSON in this exact structure without markdown backticks:
     ];
 
     res.json({
-      summary: `High-fidelity ${style || 'Cinematic'} production plan crafted for "${name || 'Creative Story'}", tuned for maximum viewer retention and emotional resonance.`,
+      summary: `High-fidelity ${style || 'Cinematic'} production plan crafted for "${name || 'Creative Story'}", tuned for viewer retention and emotional resonance.`,
       fullScript: fallbackScenes.map(s => `[${s.timeRange}] ${s.voiceoverText}`).join('\n\n'),
       scenes: fallbackScenes
     });
@@ -288,7 +242,7 @@ app.post('/api/ai/shorts-plan', async (req, res) => {
 
     if (ai) {
       try {
-        const prompt = `You are a viral YouTube Shorts and vertical video director for Kiran AI Video Studio.
+        const prompt = `You are a vertical video director for Kiran AI Video Studio.
 Generate an ultra-retention 9:16 vertical short script and production plan for:
 Topic: "${topic}"
 Initial Hook: "${hook || ''}"
@@ -354,14 +308,14 @@ Respond ONLY with valid JSON in this exact structure without markdown backticks:
         },
         {
           secondRange: '3 - 12s',
-          action: 'Split screen showing before vs after viral retention graph',
+          action: 'Split screen showing before vs after retention graph',
           onScreenText: 'THE 3-SECOND SECRET ⚡',
           cameraAngle: 'Handheld dynamic punch'
         },
         {
           secondRange: '12 - 24s',
-          action: 'Screen recording of Kiran AI Video Studio generating instant scenes',
-          onScreenText: 'AI DOES IT IN SECONDS 🎬',
+          action: 'Demonstration of scene planning in Kiran AI Video Studio',
+          onScreenText: 'STRUCTURE IN SECONDS 🎬',
           cameraAngle: 'Top-down desk view'
         },
         {
@@ -371,18 +325,18 @@ Respond ONLY with valid JSON in this exact structure without markdown backticks:
           cameraAngle: 'Front-facing wide portrait'
         }
       ],
-      captionText: `Transform your ideas into viral vertical Shorts in seconds with Kiran AI Video Studio! 🎬 Which tip was your favorite? Comment below! 👇`,
-      cta: 'Hit Subscribe and tap the link in bio to start creating today!',
-      title: `${topic || 'Viral Shorts'} Will Never Be The Same (Here's Why)`,
-      hashtags: ['#Shorts', '#Viral', '#CreatorEconomy', '#AIVideo', '#KiranAIVideoStudio', '#Trending'],
-      musicMood: '128 BPM phonk/electronic baseline with crisp percussive clicks'
+      captionText: `Transform your ideas into vertical Shorts in seconds with Kiran AI Video Studio! 🎬 Which tip was your favorite? Comment below! 👇`,
+      cta: 'Hit Subscribe and save this plan for your next video!',
+      title: `${topic || 'Viral Shorts'} - 3-Second Retention Breakdown`,
+      hashtags: ['#Shorts', '#CreatorEconomy', '#AIVideo', '#KiranAIVideoStudio'],
+      musicMood: '128 BPM electronic baseline with crisp percussive clicks'
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Shorts generation failed. Please try again.' });
   }
 });
 
-// AI Content Assistant (All 14 Items + SEO Analysis)
+// AI Content Assistant (All Deliverables + SEO Analysis)
 app.post('/api/ai/content-assistant', async (req, res) => {
   try {
     const { prompt: userIdea, videoType, targetAudience, language, mainKeyword } = req.body;
@@ -390,7 +344,7 @@ app.post('/api/ai/content-assistant', async (req, res) => {
 
     if (ai) {
       try {
-        const prompt = `You are Kiran AI Video Studio's elite YouTube SEO & Content Strategist.
+        const prompt = `You are Kiran AI Video Studio's YouTube SEO & Content Strategist.
 Analyze this video concept thoroughly:
 Video Idea: "${userIdea}"
 Video Type: "${videoType || 'YouTube Video'}"
@@ -459,7 +413,7 @@ Respond ONLY with valid JSON in this exact structure without markdown backticks:
         const cleaned = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
         return res.json(JSON.parse(cleaned));
       } catch {
-        // High-performance SEO content generator fallback activates seamlessly
+        // Fallback activates
       }
     }
 
@@ -479,55 +433,44 @@ Respond ONLY with valid JSON in this exact structure without markdown backticks:
         'The Secret Behind Stunning Visual Storytelling in 2026',
         'Official 4K Cinematic Release (Director\'s Cut)'
       ],
-      youtubeDescription: `Experience the soulful journey of "${userIdea || 'Kathmandu Monsoon Romance'}". Produced and directed using modern creator technology on Kiran AI Video Studio.
-
-🔔 Subscribe for weekly cinematic releases & creative masterclasses: https://youtube.com/@kiranstudio
+      youtubeDescription: `Experience "${userIdea || 'Kathmandu Monsoon Romance'}". Produced and directed using modern creator tools on Kiran AI Video Studio.
 
 ⏱️ TIMESTAMPS:
 0:00 - Introduction & Monsoon Prelude
 0:45 - The Encounter Under the Pagoda
 1:30 - Whispers in the Rain
-2:15 - Harmonic Sarangi Crescendo
+2:15 - Harmonic Crescendo
 3:00 - Closing Reflections & Credits
 
 🎵 CREDITS & PRODUCTION:
 • Production & Story: Kiran AI Video Studio
-• Sound Design & Audio: Atmospheric Master Mixing
-• Visual Color Grading: Kathmandu Monsoon Palette (Teal & Amber)
+• Sound Design & Audio: Master Mixing
+• Visual Color Grading: Teal & Amber Palette
 
-💬 Tell us in the comments: What memory does this song or video evoke in you? We read and reply to every creator!`,
+💬 Tell us in the comments: What memory does this video evoke in you? We read and reply to every creator!`,
       hashtags: [
         '#KiranAIVideoStudio',
         isNepali ? '#NepaliMusicVideo' : '#CinematicVideo',
         isNepali ? '#NepaliRomanticSong' : '#VisualStorytelling',
-        '#Kathmandu',
-        '#MonsoonVibes',
         '#4KVideo',
-        '#MusicProducer',
         '#Creators',
-        '#YouTubeCreator',
-        '#TrendingNow'
+        '#YouTubeCreator'
       ],
       youtubeTags: [
         'kiran ai video studio',
         isNepali ? 'nepali song 2026' : 'cinematic video',
         isNepali ? 'kathmandu monsoon' : 'visual storytelling',
-        isNepali ? 'nepali romantic music' : '4k video editing',
         'music video',
         'official video',
         'sound design',
         'youtube creator',
-        'sarangi melodies',
-        'emotional story',
-        'monsoon rain romance'
+        'emotional story'
       ],
       keywords: [
         isNepali ? 'nepali romantic song' : 'cinematic video',
         isNepali ? 'kathmandu music video' : 'video editing tutorial',
-        'monsoon rain cinematic',
         'kiran ai video studio',
         'youtube optimization',
-        'acoustic guitar and sarangi',
         'high retention storytelling'
       ],
       thumbnailText: isNepali ? 'मायाको झरी' : 'MUST WATCH',
@@ -535,43 +478,43 @@ Respond ONLY with valid JSON in this exact structure without markdown backticks:
         ? 'के तपाईँले कहिल्यै काठमाडौँको झरीमा कसैलाई मुटु खोलेर सम्झनुभएको छ? यो भिडियो तपाईँकै लागि हो...'
         : 'If you only watch one cinematic story this month, make sure it is this one. Notice how the lighting shifts right here...',
       cta: 'Don\'t forget to hit like, subscribe to the channel, and share this with someone who appreciates heartfelt storytelling.',
-      disclaimer: 'Notice: This audio-visual production was conceptualized, edited, and rendered through Kiran AI Video Studio. All artistic narrative rights and intellectual property remain with the creator.',
-      shortsCaption: '🌧️ Under the Kathmandu rain, some stories never fade... Watch the full official video on our YouTube channel! Link in bio. #Shorts #NepaliSong #KiranStudio',
-      tiktokCaption: 'That monsoon feeling in Kathmandu hits different... ☔✨ Full video on YouTube! #fyp #nepalitiktok #kathmandurain #musicvideo',
-      facebookCaption: 'We are thrilled to unveil our latest visual masterpiece! Watch Kathmandu Monsoon Romance in 4K now on YouTube and let us know your thoughts in the comments below.',
-      pinnedComment: '❤️ Thank you all for the tremendous love! Which scene touched your heart the most: Durbar Square in the rain or the final sunset breakthrough? Let us know below! 👇',
-      communityPost: '🎉 New Release Alert! Our latest video is now streaming. Head over to the channel and watch in full 4K with headphones for the best spatial audio experience!',
+      disclaimer: 'Notice: This audio-visual production was conceptualized and planned through Kiran AI Video Studio. All artistic narrative rights and intellectual property remain with the creator.',
+      shortsCaption: '🌧️ Under the rain, some stories never fade... Watch the full video on YouTube! #Shorts #KiranStudio',
+      tiktokCaption: 'That monsoon feeling hits different... ☔✨ #fyp #video #cinematic',
+      facebookCaption: 'We are thrilled to unveil our latest visual masterpiece! Watch now on YouTube and let us know your thoughts in the comments below.',
+      pinnedComment: '❤️ Thank you all for the support! Which scene touched your heart the most? Let us know below! 👇',
+      communityPost: '🎉 New Release Alert! Our latest video is now streaming. Head over to the channel and watch in full 4K!',
       seoAnalysis: {
         score: 92,
         keywordRelevance: {
           score: 94,
-          explanation: 'Target keywords directly match high-volume organic search queries and video metadata.'
+          explanation: 'Target keywords directly match organic search queries and video metadata.'
         },
         searchIntent: {
           score: 90,
-          explanation: 'Accurately aligns with user search intent for musical experience and visual storytelling.'
+          explanation: 'Accurately aligns with user search intent for visual storytelling.'
         },
         titleClarity: {
           score: 95,
-          explanation: 'Clear, concise headline within 65 characters with strong emotional and thematic clarity.'
+          explanation: 'Clear, concise headline within 65 characters with strong thematic clarity.'
         },
         descriptionQuality: {
           score: 91,
-          explanation: 'Includes structured timestamps, natural keyword density, links, and high-engagement comment hooks.'
+          explanation: 'Includes structured timestamps, natural keyword density, and comment hooks.'
         },
         keywordCoverage: {
           score: 89,
-          explanation: 'Covers primary head terms, long-tail variations, and localized language tags.'
+          explanation: 'Covers primary head terms and long-tail variations.'
         },
         readability: {
           score: 93,
-          explanation: 'Scannable formatting, bullet points, clean whitespace, and accessible language grade.'
+          explanation: 'Scannable formatting, bullet points, clean whitespace, and accessible language.'
         },
         audienceRelevance: {
           score: 92,
-          explanation: 'Directly addresses creator community and fans with specific emotional resonance.'
+          explanation: 'Directly addresses creator community with specific emotional resonance.'
         },
-        overallAssessment: 'Strong, balanced SEO foundation. The metadata establishes topical authority and user engagement signals without relying on keyword stuffing or misleading clickbait.'
+        overallAssessment: 'Strong, balanced SEO foundation. The metadata establishes topical authority without relying on keyword stuffing or misleading clickbait.'
       }
     });
   } catch (err: any) {
@@ -598,33 +541,30 @@ Respond ONLY with valid JSON in this exact structure without markdown backticks:
 {
   "concept": "Core visual thumbnail composition concept",
   "layoutDescription": "Rule of thirds arrangement, subject position, text zone",
-  "mainHeadline": "3-4 word punchy text for maximum mobile readability",
-  "subHeadline": "Optional short badge or reaction word",
-  "colorPalette": ["#FF0055", "#00F0FF", "#FFE600", "#111827"],
+  "mainHeadline": "3-4 word high contrast headline",
+  "subHeadline": "Optional punchy subheader",
+  "colorPalette": ["#6366F1", "#06B6D4", "#F59E0B", "#111827"],
   "badgeText": "4K HDR",
-  "imagePrompt": "Detailed prompt ready to feed directly into Imagen 3 / Midjourney for generating the background asset",
-  "recommendedAspect": "${aspectRatio || '16:9'}",
-  "style": "${style || 'Viral-style creator thumbnail'}"
+  "imagePrompt": "Full AI image generation prompt for Imagen or Midjourney with cinematic camera lenses, lighting, and textures",
+  "style": "${style || 'Viral'}"
 }`;
 
         const text = await generateGeminiContentWithFallback(ai, prompt);
         const cleaned = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
         return res.json(JSON.parse(cleaned));
       } catch {
-        // High-CTR thumbnail composition generator fallback activates seamlessly
+        // Fallback
       }
     }
 
-    // Programmatic fallback
     res.json({
-      concept: `High-impact ${style || 'Cinematic'} composition featuring high facial emotion on the right third, vibrant background lighting, and ultra-bold contrast typography on the left.`,
-      layoutDescription: 'Subject on the right 40% looking toward text; big bold high-contrast text on left 60%; dark vignette on edges to make center pop.',
-      mainHeadline: (title && title.split(' ').slice(0, 3).join(' ')) || 'LOST IN RAIN',
-      subHeadline: 'UNFOLDING SECRET',
-      colorPalette: ['#6366F1', '#06B6D4', '#F59E0B', '#0F172A'],
-      badgeText: '4K CINEMA',
-      imagePrompt: `Ultra-detailed cinematic portrait, dramatic rain droplets catching warm amber and neon cyan reflections, Kathmandu historic temple architecture in soft bokeh, 8k, volumetric lighting, photorealistic expression, styled for YouTube thumbnail.`,
-      recommendedAspect: aspectRatio || '16:9',
+      concept: `High contrast ${style || 'cinematic'} thumbnail featuring subject with emotional expression on the right third and bold headline typography on the left.`,
+      layoutDescription: 'Right 40%: Hero character gaze looking toward left copy. Left 60%: High contrast bold sans-serif text with amber drop shadow.',
+      mainHeadline: (title || 'VIRAL SECRETS').toUpperCase().slice(0, 20),
+      subHeadline: 'OFFICIAL 4K',
+      colorPalette: ['#6366F1', '#06B6D4', '#F59E0B', '#111827'],
+      badgeText: 'MUST WATCH',
+      imagePrompt: `Cinematic commercial photography, high detail portrait related to ${idea || 'dramatic story'}, dramatic rim lighting, shallow depth of field, 8k resolution, rule of thirds, award-winning shot.`,
       style: style || 'Viral-style creator thumbnail'
     });
   } catch (err: any) {
@@ -632,427 +572,375 @@ Respond ONLY with valid JSON in this exact structure without markdown backticks:
   }
 });
 
-
-// ==========================================
-// --- Custom Authentication Endpoints ---
-// ==========================================
-
-// 1. User Registration: Requires ONLY username and password
-app.post('/api/auth/register', async (req, res) => {
+// AI Website Guide Endpoint
+app.post('/api/ai/guide', async (req, res) => {
   try {
-    const { username, password } = req.body || {};
+    const { message, history } = req.body;
+    const userMessage = (message || '').trim();
 
-    // Strict input validation
-    if (!username || typeof username !== 'string' || !username.trim()) {
-      return res.status(400).json({ success: false, error: 'Username is required.' });
+    if (!userMessage) {
+      return res.status(400).json({ error: 'Message cannot be empty.' });
     }
 
-    const trimmedUsername = username.trim();
-    if (trimmedUsername.length < 3 || trimmedUsername.length > 30) {
-      return res.status(400).json({ success: false, error: 'Username must be 3-30 characters' });
-    }
+    const ai = getGeminiClient();
 
-    // Alphanumeric + underscores only
-    if (!/^[a-zA-Z0-9_]+$/.test(trimmedUsername)) {
-      return res.status(400).json({ success: false, error: 'Username can only contain letters, numbers, and underscores.' });
-    }
-
-    if (!password || typeof password !== 'string') {
-      return res.status(400).json({ success: false, error: 'Password is required.' });
-    }
-
-    if (password.length < 6) {
-      return res.status(400).json({ success: false, error: 'Password must be at least 6 characters' });
-    }
-
-    if (password.length > 128) {
-      return res.status(400).json({ success: false, error: 'Password cannot exceed 128 characters.' });
-    }
-
-    // Check username uniqueness (case-insensitive)
-    const existing = await DatabaseService.findUserByUsername(trimmedUsername);
-    if (existing) {
-      return res.status(409).json({ success: false, error: 'Username already exists' });
-    }
-
-    // Secure password hashing with bcrypt - never store plaintext
-    const passwordHash = await AuthService.hashPassword(password);
-
-    // Create user with unique immutable user ID
-    let newUser: DbUser;
-    try {
-      newUser = await DatabaseService.createUser({
-        username: trimmedUsername,
-        displayUsername: trimmedUsername,
-        passwordHash,
-        role: 'user'
-      });
-    } catch (createErr: any) {
-      const errMsg = createErr?.message || '';
-      if (errMsg.toLowerCase().includes('already') || errMsg.toLowerCase().includes('unique') || errMsg.toLowerCase().includes('duplicate')) {
-        return res.status(409).json({ success: false, error: 'Username already exists' });
+    // Whitelist of valid tool IDs currently live on Kiran AI Video Studio
+    const VALID_TOOL_METADATA: Record<string, { name: string; route: string; purpose: string }> = {
+      'video-generator': {
+        name: 'AI Video Planner',
+        route: 'video-generator',
+        purpose: 'Multi-scene screenplay & script planner with scene timing brackets, camera movements, dialogue, voiceover, sound cues, visual prompts.'
+      },
+      'shorts-creator': {
+        name: 'Shorts & Reels Creator',
+        route: 'shorts-creator',
+        purpose: '9:16 vertical video storyboarder and pacing strategist with 3-second hook script, rapid visual scene cuts, on-screen text, and caption copy.'
+      },
+      'content-assistant': {
+        name: 'Content & SEO Assistant',
+        route: 'content-assistant',
+        purpose: 'YouTube SEO and metadata optimizer. Generates 5 high-CTR titles, structured descriptions with chapters/timestamps, tags, hashtags, and objective 0-100 SEO scoring.'
+      },
+      'thumbnail-maker': {
+        name: 'Thumbnail Concept Designer',
+        route: 'thumbnail-maker',
+        purpose: 'High-CTR YouTube thumbnail composition architect with rule-of-thirds visual hierarchy, emotional focal subject, bold headline text, and AI image prompts.'
+      },
+      'video-editor': {
+        name: 'Timeline Video Editor',
+        route: 'video-editor',
+        purpose: 'In-browser multi-track timeline video editor. Arrange video clips, audio tracks, and subtitle layers with trim, playhead scrub, volume balance, and canvas preview.'
+      },
+      'music-video': {
+        name: 'Music Video Storyboarder',
+        route: 'music-video',
+        purpose: 'Narrative storyboarder specialized for songs (Nepali folk, acoustic, modern pop, romantic). Breaks songs into Intro, Verse, Chorus, and Climax with character emotion arcs.'
+      },
+      'templates': {
+        name: 'Templates Library',
+        route: 'templates',
+        purpose: 'Curated collection of pre-made video templates (Travel Vlogs, Tech Reviews, Documentary, Folk Music Video, Storytelling Shorts) ready to load directly into the planner.'
+      },
+      'projects': {
+        name: 'My Projects',
+        route: 'projects',
+        purpose: 'Local workspace project manager. View saved video plans, re-open them in the video editor, export as JSON, or organize drafts in browser storage.'
+      },
+      'about-us': {
+        name: 'About Us',
+        route: 'about-us',
+        purpose: 'Learn about creator Kiran Chaulagain, studio mission, architecture, and transparent creator policies.'
+      },
+      'contact-us': {
+        name: 'Contact Us',
+        route: 'contact-us',
+        purpose: 'Direct contact form and email (kiranchaulagain094@gmail.com) for inquiries, feedback, and support.'
       }
-      throw createErr;
+    };
+
+    if (ai) {
+      try {
+        const formattedHistory = Array.isArray(history) 
+          ? history.slice(-6).map((h: any) => `${h.role === 'user' ? 'Visitor' : 'Guide'}: ${h.content}`).join('\n')
+          : '';
+
+        const systemPrompt = `You are the "AI Website Guide" for Kiran AI Video Studio, created by Kiran Chaulagain.
+Your purpose: Understand what the visitor needs and explain which Kiran AI Video Studio tools/features can help them.
+
+CURRENT AVAILABLE TOOLS ON KIRAN AI VIDEO STUDIO:
+1. "video-generator" (AI Video Planner): Multi-scene screenplay, scriptwriting, camera movements, dialogue, voiceover, sound cues, visual prompts for full videos.
+2. "shorts-creator" (Shorts & Reels Creator): 9:16 vertical video storyboarder, 3-second hook scripts, fast visual pacing, on-screen text, captions for YouTube Shorts/TikTok/Reels.
+3. "content-assistant" (Content & SEO Assistant): YouTube SEO, 5 title variations, full structured description with chapters/timestamps, keyword tags, hashtags, 0-100 objective SEO score.
+4. "thumbnail-maker" (Thumbnail Concept Designer): High-CTR thumbnail composition, visual layout rules (Rule of Thirds, Split Screen), bold headline typography, color palettes, and AI image generator prompts.
+5. "video-editor" (Timeline Video Editor): In-browser multi-track timeline video editor to arrange video, audio, and subtitle layers, trim clips, and preview playback.
+6. "music-video" (Music Video Storyboarder): Narrative storyboarder specialized for songs (Nepali folk, acoustic, modern pop, romantic) with verse-by-verse scene breakdowns and character emotion arcs.
+7. "templates" (Templates Library): Pre-built video & short templates ready to load into the planner.
+8. "projects" (My Projects): Workspace project manager stored in browser to manage and reopen saved video plans.
+9. "about-us" (About Us): Creator biography of Kiran Chaulagain and studio mission.
+10. "contact-us" (Contact Us): Direct contact form and official email (kiranchaulagain094@gmail.com).
+
+CRITICAL RULES:
+1. LANGUAGE SUPPORT:
+- Support ALL languages (Nepali, Romanized Nepali, Hindi, English, Spanish, etc.).
+- Automatically detect the language and dialect the user is using.
+- ALWAYS respond in the EXACT same language and style!
+- If the visitor writes in Romanized Nepali (e.g., "mero song ko lagi title ra description chahiyo", "Shorts kasari banaune?"), reply naturally in Romanized Nepali / Nepali style!
+- If the visitor writes in Devanagari Nepali, reply in Devanagari Nepali.
+- If the visitor writes in Hindi, reply in Hindi.
+- If the visitor writes in English, reply in English.
+- If the visitor mixes languages (e.g. English + Nepali), reply naturally in the same mixed conversational style. Do NOT force English.
+
+2. HONESTY & ACCURACY:
+- Only recommend tools from the exact list above.
+- NEVER invent a feature.
+- NEVER pretend a feature works if it does not exist (for example: we do NOT have automated cloud MP4 rendering, direct auto-uploading to YouTube, or AI voice cloning).
+- If none of the current tools can solve the user's request, be honest in their language:
+  "Currently, Kiran AI Video Studio does not have a tool for that." (or translated to user's language).
+- If the user asks something unrelated to video creation (e.g. math, coding, cooking), answer briefly if appropriate, and then explain whether Kiran AI Video Studio has a relevant creative feature.
+
+3. NO FALSE CLAIMS:
+- NEVER make claims like: guaranteed viral, guaranteed views, guaranteed subscribers, guaranteed monetization, or 100% accurate.
+- Be genuinely helpful rather than promotional.
+
+4. EXPLANATION STRUCTURE:
+In your response message:
+- Clearly state what the visitor wants to accomplish.
+- Explain which Kiran AI tool(s) can help them.
+- Explain why each tool is relevant.
+- Explain how to use it.
+- Explain what result they can expect.
+- If more than one tool is useful, explain them in a simple, logical sequence (e.g., 1. Video Planner -> 2. Thumbnail -> 3. SEO Assistant).
+
+OUTPUT FORMAT:
+Respond with ONLY valid JSON (no markdown ticks):
+{
+  "userGoal": "Concise summary of user's goal",
+  "detectedLanguage": "Detected language/dialect name",
+  "message": "Your helpful response explaining their goal, recommended tools, how to use them, and what to expect in their language",
+  "recommendedTools": [
+    {
+      "id": "one-of-the-allowed-ids-above",
+      "name": "Exact Name of Tool",
+      "reason": "Short reason why this tool helps their goal (in user's language)"
     }
-
-    // Generate secure session token
-    const token = AuthService.createToken(newUser);
-
-    // Record session in user_sessions table when PostgreSQL is configured
-    const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
-    const userAgent = req.headers['user-agent'] as string || '';
-    try {
-      await DatabaseService.registerSession(newUser.id, token, clientIp, userAgent);
-    } catch (sessionErr) {
-      console.warn('Session registration notice:', sessionErr);
-    }
-
-    // Set secure HttpOnly cookie
-    AuthService.setSessionCookie(res, token);
-
-    return res.status(201).json({
-      success: true,
-      token,
-      user: {
-        id: newUser.id,
-        username: newUser.displayUsername,
-        role: newUser.role,
-        createdAt: newUser.createdAt,
-        avatar: newUser.avatar
-      }
-    });
-  } catch (err: any) {
-    console.error('Registration error:', err);
-    const msg = err?.message || 'Unable to create account. Please try again.';
-    if (msg.toLowerCase().includes('already') || msg.toLowerCase().includes('duplicate') || msg.toLowerCase().includes('unique')) {
-      return res.status(409).json({ success: false, error: 'Username already exists' });
-    }
-    return res.status(500).json({ success: false, error: 'Unable to create account. Please try again.' });
-  }
-});
-
-// 2. User Login: Username and Password with Rate Limiting & Generic Errors
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { username, password } = req.body;
-
-    if (!username || !password || typeof username !== 'string' || typeof password !== 'string') {
-      return res.status(400).json({ success: false, error: 'Username and password are required.' });
-    }
-
-    const trimmedUsername = username.trim();
-    const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
-    const rateLimitKey = `${clientIp}:${trimmedUsername.toLowerCase()}`;
-
-    // Check rate limit: 5 failed attempts within 15 minutes
-    const rateCheck = DatabaseService.checkRateLimit(rateLimitKey);
-    if (!rateCheck.allowed) {
-      return res.status(429).json({
-        success: false,
-        error: `Too many failed login attempts. Please try again in ${rateCheck.remainingMinutes || 15} minutes.`
-      });
-    }
-
-    // Lookup user by normalized username from PostgreSQL / storage
-    const user = await DatabaseService.findUserByUsername(trimmedUsername);
-
-    // If user not found, perform dummy hash comparison to prevent timing attacks
-    if (!user) {
-      DatabaseService.recordFailedAttempt(rateLimitKey);
-      await AuthService.verifyPassword('dummy_password_timing', '$2a$12$e8Y/3O8m1a6ZJkRkQz3ywe0NnCqvK2uYw4p6vL6Kk6w4w4w4w4w4e');
-      return res.status(401).json({ success: false, error: 'Invalid username or password.' });
-    }
-
-    // Verify bcrypt password hash
-    const isValid = await AuthService.verifyPassword(password, user.passwordHash);
-    if (!isValid) {
-      DatabaseService.recordFailedAttempt(rateLimitKey);
-      return res.status(401).json({ success: false, error: 'Invalid username or password.' });
-    }
-
-    // Check if account is suspended
-    if (user.status === 'suspended') {
-      return res.status(403).json({ success: false, error: 'Your account has been suspended. Please contact administrator.' });
-    }
-
-    // Reset rate limit on successful authentication
-    DatabaseService.resetRateLimit(rateLimitKey);
-
-    // Create session token and set HttpOnly cookie
-    const token = AuthService.createToken(user);
-    AuthService.setSessionCookie(res, token);
-
-    // Record session in database
-    const userAgent = req.headers['user-agent'] as string || '';
-    await DatabaseService.registerSession(user.id, token, clientIp, userAgent);
-
-    return res.json({
-      success: true,
-      token,
-      user: {
-        id: user.id,
-        username: user.displayUsername,
-        role: user.role,
-        createdAt: user.createdAt,
-        avatar: user.avatar
-      }
-    });
-  } catch (err: any) {
-    console.error('Login error:', err);
-    return res.status(500).json({ success: false, error: 'Login failed. Please try again.' });
-  }
-});
-
-// 3. User Logout: Clears session cookie and deletes session record
-app.post('/api/auth/logout', async (req, res) => {
-  const token = AuthService.extractToken(req);
-  if (token) {
-    await DatabaseService.deleteSession(token);
-  }
-  AuthService.clearSessionCookie(res);
-  res.json({ success: true, message: 'Logged out successfully.' });
-});
-
-// 4. Session Verification Endpoint (Permits direct creator access)
-app.get('/api/auth/me', async (req, res) => {
-  const token = AuthService.extractToken(req);
-  if (!token) {
-    return res.json({
-      authenticated: true,
-      user: {
-        id: 'usr_studio_creator',
-        username: 'Kiran Studio Creator',
-        role: 'admin',
-        createdAt: '2026-01-01T00:00:00Z',
-        avatar: 'https://ui-avatars.com/api/?name=Kiran+Studio&background=6366f1&color=fff'
-      }
-    });
-  }
-
-  const decoded = AuthService.verifyToken(token);
-  if (!decoded || !decoded.sub) {
-    return res.json({
-      authenticated: true,
-      user: {
-        id: 'usr_studio_creator',
-        username: 'Kiran Studio Creator',
-        role: 'admin',
-        createdAt: '2026-01-01T00:00:00Z',
-        avatar: 'https://ui-avatars.com/api/?name=Kiran+Studio&background=6366f1&color=fff'
-      }
-    });
-  }
-
-  const user = await DatabaseService.findUserById(decoded.sub);
-  if (!user || user.status === 'suspended') {
-    return res.json({
-      authenticated: true,
-      user: {
-        id: 'usr_studio_creator',
-        username: 'Kiran Studio Creator',
-        role: 'admin',
-        createdAt: '2026-01-01T00:00:00Z',
-        avatar: 'https://ui-avatars.com/api/?name=Kiran+Studio&background=6366f1&color=fff'
-      }
-    });
-  }
-
-  return res.json({
-    authenticated: true,
-    user: {
-      id: user.id,
-      username: user.displayUsername,
-      role: user.role,
-      createdAt: user.createdAt,
-      avatar: user.avatar
-    }
-  });
-});
-
-// ==========================================
-// --- User-Isolated Projects API Routes ---
-// ==========================================
-
-// Get all projects for the currently authenticated user
-app.get('/api/projects', requireAuth, async (req: AuthenticatedRequest, res) => {
-  try {
-    const isAdmin = req.user?.role === 'admin';
-    const projects = await DatabaseService.getProjectsForUser(req.userId!, isAdmin);
-    res.json({ projects });
-  } catch (err: any) {
-    res.status(500).json({ error: 'Failed to fetch projects.' });
-  }
-});
-
-// Create a new project strictly bound to authenticated req.userId
-app.post('/api/projects', requireAuth, async (req: AuthenticatedRequest, res) => {
-  try {
-    const newProject = await DatabaseService.createProject(req.userId!, req.body);
-    res.status(201).json({ project: newProject });
-  } catch (err: any) {
-    res.status(400).json({ error: err.message || 'Failed to create project.' });
-  }
-});
-
-// Update a project (Ownership verification enforced)
-app.put('/api/projects/:id', requireAuth, async (req: AuthenticatedRequest, res) => {
-  try {
-    const isAdmin = req.user?.role === 'admin';
-    const updated = await DatabaseService.updateProject(req.params.id, req.userId!, req.body, isAdmin);
-    res.json({ project: updated });
-  } catch (err: any) {
-    if (err.message.includes('not found')) {
-      return res.status(404).json({ error: err.message });
-    }
-    if (err.message.includes('Unauthorized')) {
-      return res.status(403).json({ error: err.message });
-    }
-    res.status(400).json({ error: err.message || 'Failed to update project.' });
-  }
-});
-
-// Delete a project (Ownership verification enforced)
-app.delete('/api/projects/:id', requireAuth, async (req: AuthenticatedRequest, res) => {
-  try {
-    const isAdmin = req.user?.role === 'admin';
-    await DatabaseService.deleteProject(req.params.id, req.userId!, isAdmin);
-    res.json({ success: true, id: req.params.id });
-  } catch (err: any) {
-    if (err.message.includes('not found')) {
-      return res.status(404).json({ error: err.message });
-    }
-    if (err.message.includes('Unauthorized')) {
-      return res.status(403).json({ error: err.message });
-    }
-    res.status(400).json({ error: err.message || 'Failed to delete project.' });
-  }
-});
-
-// Duplicate a project (Creates clone owned by current authenticated user)
-app.post('/api/projects/:id/duplicate', requireAuth, async (req: AuthenticatedRequest, res) => {
-  try {
-    const original = await DatabaseService.getProjectById(req.params.id);
-    if (!original) {
-      return res.status(404).json({ error: 'Project not found.' });
-    }
-    const isAdmin = req.user?.role === 'admin';
-    if (original.userId !== req.userId && !isAdmin) {
-      return res.status(403).json({ error: 'Unauthorized to duplicate this project.' });
-    }
-
-    const duplicated = await DatabaseService.createProject(req.userId!, {
-      ...original,
-      title: `${original.title} (Copy)`
-    });
-
-    res.status(201).json({ project: duplicated });
-  } catch (err: any) {
-    res.status(400).json({ error: err.message || 'Failed to duplicate project.' });
-  }
-});
-
-// ==========================================
-// --- Admin API Routes with Custom Auth ---
-// ==========================================
-
-app.get('/api/admin/dashboard', requireAdmin, async (req: AuthenticatedRequest, res) => {
-  const allUsers = await DatabaseService.getAllUsers();
-  const allProjects = await DatabaseService.getProjectsForUser('', true);
-
-  res.json({
-    stats: {
-      totalUsers: allUsers.length,
-      activeProjects: allProjects.length,
-      aiUsageTokens: 4200000,
-      videosGenerated: allProjects.filter(p => p.status === 'ready' || p.status === 'completed').length
-    }
-  });
-});
-
-app.get('/api/admin/users', requireAdmin, async (req: AuthenticatedRequest, res) => {
-  const users = await DatabaseService.getAllUsers();
-  res.json({ users });
-});
-
-app.patch('/api/admin/users/:id/status', requireAdmin, async (req: AuthenticatedRequest, res) => {
-  const { status } = req.body;
-  if (status !== 'active' && status !== 'suspended') {
-    return res.status(400).json({ error: 'Invalid status.' });
-  }
-  const success = await DatabaseService.updateUserStatus(req.params.id, status);
-  if (!success) {
-    return res.status(404).json({ error: 'User not found.' });
-  }
-  res.json({ success: true, id: req.params.id, status });
-});
-
-// Official Admin YouTube Channel State & Endpoints
-let currentAdminChannel = {
-  id: 'yt-kiranaimusic-94',
-  channelName: 'Kiran AI Music',
-  handle: '@kiranaimusic-94',
-  url: 'https://youtube.com/@kiranaimusic-94?si=mTfia-Y4ZdAQqOFl',
-  shareUrl: 'https://youtube.com/@kiranaimusic-94',
-  description: 'Official AI Music Production, Nepali Beats & Cinematic Soundscapes YouTube channel for Kiran AI Video Studio.',
-  avatarUrl: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&auto=format&fit=crop&q=80',
-  bannerUrl: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=1200&auto=format&fit=crop&q=80',
-  verifiedAdmin: true,
-  connectedEmail: 'admin@kiranstudio.ai',
-  connectedAt: '2026-09-18T09:25:00Z',
-  category: 'AI Music & Video Productions',
-  subscribersCount: 'Verified Creator',
-  videosCount: 'Official Catalog',
-  status: 'Connected',
-  featuredPlaylists: [
-    { title: 'Nepali AI Music & Folk Fusion', count: 12 },
-    { title: 'Cinematic Visualizers & Lo-Fi Beats', count: 8 },
-    { title: 'High Energy DJ Remixes & Shorts', count: 16 }
   ]
-};
+}`;
 
-app.get('/api/admin/youtube-channel', (req, res) => {
-  res.json({ channel: currentAdminChannel });
+        const prompt = `${systemPrompt}
+
+${formattedHistory ? `PREVIOUS CONVERSATION:\n${formattedHistory}\n\n` : ''}LATEST VISITOR MESSAGE:
+"${userMessage}"`;
+
+        const rawText = await generateGeminiContentWithFallback(ai, prompt);
+        const cleaned = rawText.replace(/```json/gi, '').replace(/```/gi, '').trim();
+        const parsed = JSON.parse(cleaned);
+
+        // Sanitize recommendedTools so only real whitelist tools can ever be returned
+        const sanitizedTools = Array.isArray(parsed.recommendedTools)
+          ? parsed.recommendedTools
+              .filter((t: any) => t && typeof t.id === 'string' && VALID_TOOL_METADATA[t.id])
+              .map((t: any) => ({
+                id: t.id,
+                name: VALID_TOOL_METADATA[t.id].name,
+                reason: String(t.reason || '').trim() || VALID_TOOL_METADATA[t.id].purpose
+              }))
+          : [];
+
+        return res.json({
+          userGoal: parsed.userGoal || 'Creative video assistance',
+          detectedLanguage: parsed.detectedLanguage || 'Natural language',
+          message: parsed.message || 'Here is how Kiran AI Video Studio can help you.',
+          recommendedTools: sanitizedTools
+        });
+      } catch (err: any) {
+        console.warn('Gemini AI Guide using semantic fallback:', err?.message || String(err));
+      }
+    }
+
+    // High quality intelligent offline / fallback analyzer
+    const lower = userMessage.toLowerCase();
+
+    // Language detection heuristics
+    const isRomanizedNepali = /\b(mero|chahiyo|kasari|geet|banaune|suno|namaste|hunchha|huncha|pani|lai|cha|ko|ma|garnu|banauna|thaha|kasto)\b/i.test(lower);
+    const isDevanagariNepali = /[\u0900-\u097F]/.test(userMessage);
+    const isHindi = /\b(kaise|kare|mujhe|chahiye|karna|hai|mera|meri|gaana|bana|sakte|kripya)\b/i.test(lower) || /[\u0900-\u097F]/.test(userMessage) && /(चाहिए|कैसे|करें|बनाना|थंबनेल)/.test(userMessage);
+
+    // Intent checks (support both ASCII and Unicode without \b for Devanagari)
+    const wantsMusicOrSong = /(song|music|geet|gaana|lyrics|melody|singer|गीत|गाना|संगीत)/i.test(lower);
+    const wantsSEOOrTitle = /(title|description|seo|tag|tags|hashtag|hashtags|keywords|शीर्षक|विवरण|ट्याग)/i.test(lower);
+    const wantsThumbnail = /(thumbnail|cover|poster|photo|image|banner|थम्बनेल|थंबनेल|तस्बिर|फोटो)/i.test(lower);
+    const wantsShorts = /(short|shorts|reel|reels|tiktok|vertical|9:16|hook|कथा)/i.test(lower);
+    const wantsEditor = /(edit|editor|timeline|trim|cut|audio track|volume|layers|एडिटर|सम्पादन)/i.test(lower);
+    const wantsVideoPlan = /(video|script|screenplay|youtube|tourism|documentary|vlog|travel|nepal|camera|भिडियो|योजना)/i.test(lower);
+    const wantsAbout = /(about|who made|kiran|chaulagain|creator|developer|किरण)/i.test(lower);
+    const wantsContact = /(contact|email|support|feedback|bug|help|सम्पर्क)/i.test(lower);
+
+    // Check for clearly unsupported features
+    const wantsDirectRender = /(render.*mp4|mp4.*render|download.*mp4|make.*mp4|generate.*mp4|export.*mp4|direct.*mp4|mp4|upload to youtube|direct upload|voice clone|deepfake)/i.test(lower);
+    const isUnrelated = /\b(python|javascript|bitcoin|crypto|math|physics|biology|weather|recipe|cooking|president)\b/i.test(lower);
+
+    if (wantsDirectRender) {
+      if (isDevanagariNepali) {
+        return res.json({
+          userGoal: 'सिधै क्लाउड MP4 भिडियो रेन्डर गर्ने सुविधा',
+          detectedLanguage: 'Nepali (नेपाली)',
+          message: 'Currently, Kiran AI Video Studio does not have a tool for direct cloud MP4 rendering. किरण एआई भिडियो स्टुडियोले मल्टि-सिन पटकथा (screenplay) योजना, क्यामेरा एंगल्स, र इन-ब्राउजर टाइमलाइन भिडियो एडिटर प्रदान गर्दछ, तर सिधै MP4 फाइल रेन्डर गर्ने फार्म उपलब्ध छैन। तपाईं आफ्नो भिडियो दृश्य योजना तयार गरेर टाइमलाइन एडिटरमा ट्र्याकहरू मिलाउन सक्नुहुन्छ।',
+          recommendedTools: [
+            { id: 'video-generator', name: 'AI Video Planner', reason: 'सम्पूर्ण भिडियोको सिन र दृश्य योजना तयार गर्न' },
+            { id: 'video-editor', name: 'Timeline Video Editor', reason: 'ब्राउजर टाइमलाइनमा भिडियो र अडियो ट्र्याक मिलाउन' }
+          ]
+        });
+      }
+      if (isRomanizedNepali) {
+        return res.json({
+          userGoal: 'Automated direct MP4 video rendering',
+          detectedLanguage: 'Romanized Nepali',
+          message: 'Currently, Kiran AI Video Studio does not have a tool for that. Kiran AI Video Studio le scene-by-scene screenplay planning, camera directions, ra browser timeline editor pradan garcha, tara automatic cloud MP4 video rendering farm uplabdha chaina. Tapai aafno project ko scene plan tayar gari timeline editor ma review garna saknu huncha.',
+          recommendedTools: [
+            { id: 'video-generator', name: 'AI Video Planner', reason: 'Video screenplay ra scene breakdown plan garna' },
+            { id: 'video-editor', name: 'Timeline Video Editor', reason: 'Browser timeline ma clips ra audio review garna' }
+          ]
+        });
+      }
+      return res.json({
+        userGoal: 'Automated direct MP4 video rendering',
+        detectedLanguage: 'English',
+        message: 'Currently, Kiran AI Video Studio does not have a tool for direct cloud MP4 video rendering. Kiran AI Video Studio is specialized for multi-scene screenplay planning, 9:16 vertical shorts pacing, high-CTR thumbnail composition, and YouTube SEO optimization. You can plan your full video scenes with exact camera angles and assemble tracks in our browser Timeline Video Editor.',
+        recommendedTools: [
+          { id: 'video-generator', name: 'AI Video Planner', reason: 'Structure your complete multi-scene screenplay and visual prompts' },
+          { id: 'video-editor', name: 'Timeline Video Editor', reason: 'Inspect and trim media tracks on an in-browser timeline' }
+        ]
+      });
+    }
+
+    if (isUnrelated) {
+      return res.json({
+        userGoal: 'General non-video inquiry',
+        detectedLanguage: isDevanagariNepali ? 'Nepali (नेपाली)' : isRomanizedNepali ? 'Romanized Nepali' : 'English',
+        message: isDevanagariNepali
+          ? 'Currently, Kiran AI Video Studio does not have a tool for that. किरण एआई भिडियो स्टुडियो भिडियो निर्माता, युट्युबर, र संगीतकारहरूका लागि भिडियो पटकथा, युट्युब SEO, थम्बनेल, र सर्ट्स योजना गर्न बनाइएको प्लेटफर्म हो।'
+          : isRomanizedNepali
+          ? 'Currently, Kiran AI Video Studio does not have a tool for that. Kiran AI Video Studio video creators, YouTubers, ra musicians haru ko lagi video scripts, YouTube SEO, thumbnails, ra shorts planning garna banaiyeko creative workspace ho.'
+          : 'Currently, Kiran AI Video Studio does not have a tool for that inquiry. Kiran AI Video Studio is focused specifically on video creation: screenplay script planning, YouTube Shorts pacing, high-CTR thumbnail concepts, and YouTube SEO optimization.',
+        recommendedTools: []
+      });
+    }
+
+    // Devanagari Nepali Thumbnail
+    if (isDevanagariNepali && wantsThumbnail) {
+      return res.json({
+        userGoal: 'थम्बनेल डिजाइन र कन्सेप्ट योजना',
+        detectedLanguage: 'Nepali (नेपाली)',
+        message: 'तपाईंको युट्युब भिडियोको लागि थम्बनेल योजना गर्न किरण एआई भिडियो स्टुडियोको **Thumbnail Concept Designer** टुल उपलब्ध छ। यसले Rule of Thirds भिजुअल लेआउट, रङ्ग कन्ट्रास्ट, बोल्ड शीर्षक अक्षरहरू (typography), र एआई इमेज प्रम्प्टहरू प्रदान गर्दछ।',
+        recommendedTools: [
+          { id: 'thumbnail-maker', name: 'Thumbnail Concept Designer', reason: 'उच्च CTR भएको थम्बनेल लेआउट र प्रम्प्ट योजना गर्न' }
+        ]
+      });
+    }
+
+    // Romanized Nepali Song/SEO
+    if (isRomanizedNepali && wantsMusicOrSong) {
+      return res.json({
+        userGoal: 'Song title, description, and visual storyboard planning',
+        detectedLanguage: 'Romanized Nepali',
+        message: 'Tapai ko song ko lagi title ra description tayar garna Kiran AI Video Studio ko **Content & SEO Assistant** tool le madat garcha. Yo tool le 5 ota high-CTR YouTube titles, timestamps sahitko description, tags, ra hashtags banai dincha.\n\nSaathai, yadi tapai lai aafno geet ko visual storyline, verse-by-verse scene pacing, ra character emotions plan garna man cha bhane **Music Video Storyboarder** tool pani ekdam upayogee huncha!',
+        recommendedTools: [
+          { id: 'content-assistant', name: 'Content & SEO Assistant', reason: 'Song ko lagi YouTube SEO titles, description, ra tags banauna' },
+          { id: 'music-video', name: 'Music Video Storyboarder', reason: 'Geet ko verse ra chorus visual storyline plan garna' }
+        ]
+      });
+    }
+
+    // Devanagari Nepali Song/SEO
+    if (isDevanagariNepali && wantsMusicOrSong) {
+      return res.json({
+        userGoal: 'गीतको शीर्षक, विवरण र भिडियो योजना',
+        detectedLanguage: 'Nepali (नेपाली)',
+        message: 'तपाईंको नयाँ गीतको लागि युट्युब शीर्षक र विवरण तयार गर्न **Content & SEO Assistant** टुल उपलब्ध छ। यसले ५ वटा आकर्षक शीर्षकहरू, टाइमस्ट्याम्प सहितको विवरण, र ट्यागहरू बनाउँछ।\n\nसाथै, गीतको कथा र दृश्यहरू (storyboard) योजना गर्न **Music Video Storyboarder** टुल प्रयोग गर्न सक्नुहुन्छ!',
+        recommendedTools: [
+          { id: 'content-assistant', name: 'Content & SEO Assistant', reason: 'गीतको लागि युट्युब शीर्षक र विवरण तयार गर्न' },
+          { id: 'music-video', name: 'Music Video Storyboarder', reason: 'गीतको दृश्य कथा र क्यारेक्टर भावना योजना गर्न' }
+        ]
+      });
+    }
+
+    // Thumbnail specific request
+    if (wantsThumbnail) {
+      if (isRomanizedNepali) {
+        return res.json({
+          userGoal: 'Thumbnail concept & visual design idea',
+          detectedLanguage: 'Romanized Nepali',
+          message: 'Tapai ko video ko lagi thumbnail concept banauna **Thumbnail Concept Designer** tool uplabdha cha. Yasle Rule of Thirds layout, visual contrast, bold headline typography ideas, ra AI image generator prompt pradan garcha.',
+          recommendedTools: [
+            { id: 'thumbnail-maker', name: 'Thumbnail Concept Designer', reason: 'High-CTR YouTube thumbnail ideas ra AI visual prompt prapta garna' }
+          ]
+        });
+      }
+      return res.json({
+        userGoal: 'High-CTR thumbnail concept & composition',
+        detectedLanguage: 'English',
+        message: 'To get compelling thumbnail ideas, you can use our **Thumbnail Concept Designer**. It provides proven Rule of Thirds layout architecture, focal subject guidelines, high-contrast bold typography suggestions, color palettes, and copy-ready AI image prompts.',
+        recommendedTools: [
+          { id: 'thumbnail-maker', name: 'Thumbnail Concept Designer', reason: 'Create visual composition guidelines and headline concepts' }
+        ]
+      });
+    }
+
+    // Shorts / Reels specific
+    if (wantsShorts) {
+      return res.json({
+        userGoal: 'Vertical 9:16 short video creation',
+        detectedLanguage: isRomanizedNepali ? 'Romanized Nepali' : 'English',
+        message: isRomanizedNepali 
+          ? 'Shorts, Reels wa TikTok video banauna **Shorts & Reels Creator** prayog garnus. Yasle 3-second opening hook, rapid visual cuts, ra on-screen text overlays plan gari dincha.'
+          : 'To create vertical short-form content for YouTube Shorts, Reels, or TikTok, use the **Shorts & Reels Creator**. It crafts 3-second high-retention hooks, second-by-second scene cuts, and on-screen caption copy.',
+        recommendedTools: [
+          { id: 'shorts-creator', name: 'Shorts & Reels Creator', reason: 'Plan vertical 9:16 hook-first short videos' }
+        ]
+      });
+    }
+
+    // Nepal Tourism / YouTube Video Workflow
+    if (wantsVideoPlan) {
+      if (isRomanizedNepali) {
+        return res.json({
+          userGoal: 'YouTube video production workflow',
+          detectedLanguage: 'Romanized Nepali',
+          message: 'YouTube video plan garna tapai 3 ota tools step-by-step prayog garna saknu huncha:\n\n1. **AI Video Planner**: Scene-by-scene script, camera movements, ra voiceover plan garna.\n2. **Thumbnail Concept Designer**: High-contrast thumbnail visual ideas ra layout tayar garna.\n3. **Content & SEO Assistant**: 5 ota catchy titles, timestamps sahitko description, ra tags generate garna.',
+          recommendedTools: [
+            { id: 'video-generator', name: 'AI Video Planner', reason: 'Full video screenplay ra camera shots plan garna' },
+            { id: 'thumbnail-maker', name: 'Thumbnail Concept Designer', reason: 'Clickable thumbnail composition banauna' },
+            { id: 'content-assistant', name: 'Content & SEO Assistant', reason: 'YouTube SEO titles, description, ra tags prapta garna' }
+          ]
+        });
+      }
+      return res.json({
+        userGoal: 'Comprehensive YouTube video creation workflow',
+        detectedLanguage: 'English',
+        message: 'To produce a successful YouTube video, you can follow this simple 3-step workflow on Kiran AI Video Studio:\n\n1. **AI Video Planner**: Structure your multi-scene screenplay with camera movements, dialogue, voiceover, and scenic pacing.\n2. **Thumbnail Concept Designer**: Design high-contrast thumbnail compositions with focal subject positioning and bold typography.\n3. **Content & SEO Assistant**: Generate 5 optimized titles, structured chapters/timestamps description, and high-relevance tags.',
+        recommendedTools: [
+          { id: 'video-generator', name: 'AI Video Planner', reason: 'Generate multi-scene script with camera shots and voiceover' },
+          { id: 'thumbnail-maker', name: 'Thumbnail Concept Designer', reason: 'Design high-CTR thumbnail layouts and image prompts' },
+          { id: 'content-assistant', name: 'Content & SEO Assistant', reason: 'Generate YouTube SEO metadata, tags, and timestamps' }
+        ]
+      });
+    }
+
+    // Default welcoming guide response
+    return res.json({
+      userGoal: 'Creative video guidance',
+      detectedLanguage: isRomanizedNepali ? 'Romanized Nepali' : 'English',
+      message: isRomanizedNepali
+        ? 'Namaste! Kiran AI Video Studio ma tapai lai swagat cha. Tapai YouTube video script, vertical Shorts, SEO tags/descriptions, thumbnail concepts, athawa music video visual plan garna saknu huncha. Tapai ke banauna chahanu huncha?'
+        : 'Welcome to Kiran AI Video Studio! I am here to understand your creative goal and guide you to the exact tools you need. Whether you want to plan a multi-scene YouTube video, outline vertical Shorts, design high-CTR thumbnails, or optimize YouTube SEO metadata, let me know what you want to create.',
+      recommendedTools: [
+        { id: 'video-generator', name: 'AI Video Planner', reason: 'Plan complete multi-scene video screenplays' },
+        { id: 'shorts-creator', name: 'Shorts & Reels Creator', reason: 'Craft 9:16 vertical shorts with 3-second hooks' },
+        { id: 'content-assistant', name: 'Content & SEO Assistant', reason: 'Generate YouTube titles, descriptions, and tags' }
+      ]
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'AI Guide processing failed. Please try again.' });
+  }
 });
 
-app.post('/api/admin/youtube-channel', requireAdmin, (req: AuthenticatedRequest, res) => {
-  const { url } = req.body;
-  if (!url || typeof url !== 'string') {
-    return res.status(400).json({ error: 'Valid YouTube channel URL is required' });
+
+// Video Generation Job Endpoints
+app.post('/api/video/jobs', async (req, res) => {
+  try {
+    const job = await VideoGenerationService.startJob(req.body);
+    res.json(job);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
   }
-
-  let handle = '@kiranaimusic-94';
-  if (url.includes('@')) {
-    const raw = url.split('@')[1].split(/[/?&]/)[0];
-    if (raw) handle = `@${raw}`;
-  }
-
-  let channelName = currentAdminChannel.channelName;
-  if (handle.toLowerCase().includes('kiranaimusic') || handle.toLowerCase().includes('kiran')) {
-    channelName = 'Kiran AI Music';
-  } else {
-    channelName = handle.replace('@', '');
-  }
-
-  currentAdminChannel = {
-    ...currentAdminChannel,
-    url: url.trim(),
-    shareUrl: `https://youtube.com/${handle}`,
-    handle,
-    channelName,
-    status: 'Connected',
-    verifiedAdmin: true,
-    connectedAt: new Date().toISOString()
-  };
-
-  res.json({ channel: currentAdminChannel, success: true });
 });
 
-// Explicit 404 Handler for API endpoints - guarantees JSON response, never HTML
+// Explicit 404 Handler for API endpoints
 app.use('/api', (req, res) => {
   res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.originalUrl || req.url}` });
 });
 
-// Global Express error handler ensuring JSON responses
+// Global Express error handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('Unhandled server error:', err);
   if (res.headersSent) {
@@ -1086,7 +974,7 @@ async function startServer() {
   });
 }
 
-// Auto-start server in standalone Node or Cloud Run container, never in Vercel or serverless functions
+// Auto-start server in standalone Node or Cloud Run container
 const isServerless = Boolean(
   process.env.VERCEL ||
   process.env.VERCEL_ENV ||
@@ -1102,4 +990,3 @@ if (!isServerless && process.env.NODE_ENV !== 'test') {
 
 export { app, startServer };
 export default app;
-

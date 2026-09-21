@@ -16,7 +16,7 @@ interface TermsOfServiceProps {
 }
 
 export const TermsOfService: React.FC<TermsOfServiceProps> = ({ onNavigate }) => {
-  const contactEmail = 'contact@kiranvideostudio.com';
+  const contactEmail = 'kiranchaulagain094@gmail.com';
 
   return (
     <LegalLayout

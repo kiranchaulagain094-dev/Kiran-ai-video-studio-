@@ -29,6 +29,10 @@ export const LegalLayout: React.FC<LegalLayoutProps> = ({
   children
 }) => {
   const tabs = [
+    { id: 'about-us', label: 'About Us', icon: ShieldCheck },
+    { id: 'how-to-use', label: 'How to Use', icon: Sparkles },
+    { id: 'ai-tools-guide', label: 'AI Tools Guide', icon: FileText },
+    { id: 'faq', label: 'FAQ', icon: AlertCircle },
     { id: 'privacy-policy', label: 'Privacy Policy', icon: ShieldCheck },
     { id: 'terms-of-service', label: 'Terms of Service', icon: FileText },
     { id: 'cookie-policy', label: 'Cookie Policy', icon: Cookie },
