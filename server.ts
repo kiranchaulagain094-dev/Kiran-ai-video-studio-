@@ -12,26 +12,27 @@ const PORT = 3000;
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-// URL normalization
-app.use((req, res, next) => {
-  const matchedPath = (req.headers['x-matched-path'] as string) || 
-                      (req.headers['x-vercel-matched-path'] as string) ||
-                      (req.headers['x-forwarded-uri'] as string);
+// Create dedicated API Router mounted at both /api and root /
+const apiRouter = express.Router();
 
-  if (matchedPath && matchedPath.startsWith('/api') && (!req.url || req.url === '/' || req.url === '/api' || !req.url.startsWith('/api'))) {
-    req.url = matchedPath;
-  } else {
-    const url = req.url || '';
-    if (!url.startsWith('/api') && (
-      url.startsWith('/video') ||
-      url.startsWith('/ai') ||
-      url.startsWith('/health')
-    )) {
-      req.url = '/api' + url;
+// Helper to clean JSON from Gemini output
+function extractJsonFromText(rawText: string): any {
+  let cleaned = rawText.trim();
+  if (cleaned.includes('```')) {
+    const match = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (match && match[1]) {
+      cleaned = match[1].trim();
     }
   }
-  next();
-});
+  if (!cleaned.startsWith('{') && !cleaned.startsWith('[')) {
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+    }
+  }
+  return JSON.parse(cleaned);
+}
 
 // Lazy initialization of Gemini Client
 let geminiClient: GoogleGenAI | null = null;
@@ -53,46 +54,40 @@ function getGeminiClient(): GoogleGenAI | null {
   return geminiClient;
 }
 
-// Resilient Gemini model caller with model fallback & exponential retry
+// Resilient Gemini model caller with fast fallback and strict timeouts for Vercel Serverless
 async function generateGeminiContentWithFallback(
   ai: GoogleGenAI,
   prompt: string,
   config?: any
 ): Promise<string> {
-  // Use approved high-availability Gemini models from @google/genai specification
-  const candidateModels = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+  // Use approved high-availability Gemini models from @google/genai specification:
+  // 'gemini-3.1-flash-lite' is ultra-fast (~1.5s) to guarantee serverless execution within Vercel limits
+  // 'gemini-flash-latest' and 'gemini-3.8-flash' provide high-depth screenplays
+  const candidateModels = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
   let lastError: any = null;
 
   for (const model of candidateModels) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const callPromise = ai.models.generateContent({
-          model,
-          contents: prompt,
-          config: config || {
-            responseMimeType: 'application/json'
-          }
-        });
-        const timeoutPromise = new Promise<never>((_, reject) => 
-          setTimeout(() => reject(new Error(`Timeout requesting ${model}`)), 9000)
-        );
+    try {
+      const callPromise = ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: config || {
+          responseMimeType: 'application/json'
+        }
+      });
+      // 7.5 second timeout per model to stay strictly within Vercel's serverless function window
+      const timeoutPromise = new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error(`Timeout requesting ${model}`)), 7500)
+      );
 
-        const response = await Promise.race([callPromise, timeoutPromise]);
-        const text = response.text || '';
-        if (text && text.trim().length > 0) {
-          return text;
-        }
-      } catch (err: any) {
-        lastError = err;
-        const errMsg = String(err?.message || err);
-        const isTransient = errMsg.includes('503') || errMsg.includes('high demand') || errMsg.includes('UNAVAILABLE') || errMsg.includes('429');
-        if (isTransient && attempt === 0) {
-          // Brief wait on temporary model load spike before retry
-          await new Promise((res) => setTimeout(res, 600));
-          continue;
-        }
-        break; // Advance to next fallback model
+      const response = await Promise.race([callPromise, timeoutPromise]);
+      const text = response.text || '';
+      if (text && text.trim().length > 0) {
+        return text;
       }
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`Gemini candidate model ${model} failed, trying next candidate:`, err?.message || err);
     }
   }
 
@@ -100,7 +95,7 @@ async function generateGeminiContentWithFallback(
 }
 
 // System Status & Health
-app.get('/api/health', (req, res) => {
+apiRouter.get(['/health', '/api/health'], (req, res) => {
   const hasGemini = Boolean(
     process.env.GEMINI_API_KEY && 
     process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY' &&
@@ -124,14 +119,22 @@ app.get('/api/health', (req, res) => {
 });
 
 // AI Video Plan Generation
-app.post('/api/ai/video-plan', async (req, res) => {
+apiRouter.post(['/ai/video-plan', '/api/ai/video-plan'], async (req, res) => {
   try {
     const { name, idea, type, aspectRatio, duration, style, voice, language, music } = req.body;
-    const ai = getGeminiClient();
+    if (!idea || typeof idea !== 'string' || idea.trim() === '') {
+      return res.status(400).json({ error: 'Core video idea prompt is required.' });
+    }
 
-    if (ai) {
-      try {
-        const prompt = `You are a professional video director and screenwriter for Kiran AI Video Studio.
+    const ai = getGeminiClient();
+    if (!ai) {
+      return res.status(503).json({
+        error: 'AI configuration is missing.',
+        details: 'GEMINI_API_KEY is not configured in Vercel project environment variables. Please add GEMINI_API_KEY in Vercel Project Settings > Environment Variables.'
+      });
+    }
+
+    const prompt = `You are a professional video director and screenwriter for Kiran AI Video Studio.
 Create a detailed, high-retention video production screenplay and scene breakdown for:
 Project Name: "${name || 'Creative Story'}"
 Core Idea: "${idea}"
@@ -163,86 +166,43 @@ Respond ONLY with valid JSON in this exact structure without markdown backticks:
   ]
 }`;
 
-        const text = await generateGeminiContentWithFallback(ai, prompt);
-        const cleaned = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
-        const parsed = JSON.parse(cleaned);
-        return res.json(parsed);
-      } catch {
-        // High-retention studio fallback activates seamlessly if API limits are reached
-      }
+    const text = await generateGeminiContentWithFallback(ai, prompt);
+    const parsed = extractJsonFromText(text);
+
+    if (!parsed || !Array.isArray(parsed.scenes)) {
+      throw new Error('AI model generated invalid scene structure.');
     }
 
-    // Programmatic fallback
-    const isNepali = (language || '').toLowerCase().includes('nepal') || (idea || '').toLowerCase().includes('nepal') || (idea || '').toLowerCase().includes('kathmandu');
-    
-    const fallbackScenes = [
-      {
-        sceneNumber: 1,
-        timeRange: '0:00 - 0:15',
-        title: 'Opening Hook & Atmosphere',
-        description: isNepali 
-          ? 'Atmospheric monsoon rain washing over the ancient brick architecture of Patan or Kathmandu square, soft glowing brass lamps.'
-          : 'High-contrast cinematic wide shot setting the mood, subtle volumetric haze, and captivating lighting.',
-        visualPrompt: `${style || 'Cinematic'} wide angle establishing shot, ${idea || 'dramatic story visual'}, 35mm film grain, dynamic lighting, 8k resolution, photorealistic.`,
-        cameraMovement: 'Slow gliding crane down into eye level',
-        voiceoverText: isNepali 
-          ? 'काठमाडौँको यो चिसो झरीमा, कतै हराएका यादहरू फेरि ब्यूँतिए झैँ लाग्छ...'
-          : 'In every story, there is a moment where time seems to hold its breath...',
-        soundEffects: 'Gentle monsoon thunder, footsteps on wet stone pavement, quiet ambient breeze',
-        musicMood: 'Melodic acoustic Sarangi intro with resonant ambient piano pads',
-        previewColor: '#1e293b'
-      },
-      {
-        sceneNumber: 2,
-        timeRange: '0:15 - 0:35',
-        title: 'The Narrative Core',
-        description: isNepali
-          ? 'Two pairs of eyes meet under an ornate wooden temple carving while taking shelter from the downpour.'
-          : 'Close-up emotional focus on central subjects, shallow depth of field, tender and compelling gaze.',
-        visualPrompt: `${style || 'Cinematic'} portrait medium close-up, warm backlight contrasting cold raindrops, tender expression, anamorphic flare.`,
-        cameraMovement: 'Subtle slow-motion slider pan across the scene',
-        voiceoverText: isNepali
-          ? 'नबोली पनि मनले मनलाई चिन्ने त्यो अदभूत क्षण...'
-          : 'When two wandering souls unexpectedly cross paths, words become unnecessary.',
-        soundEffects: 'Heartbeat pulse, water drops splashing from roof tile, distant temple chime',
-        musicMood: 'Warm acoustic guitar chords joining the cello harmony',
-        previewColor: '#0f172a'
-      },
-      {
-        sceneNumber: 3,
-        timeRange: '0:35 - 0:60',
-        title: 'Emotional Climax & Visual Resonance',
-        description: 'Golden hour breakthrough as clouds part, reflecting vibrant city lights across water puddles.',
-        visualPrompt: `${style || 'Cinematic'} golden hour epic shot, rain mist illuminated by golden sunset rays, hopeful joyful expressions.`,
-        cameraMovement: 'Smooth orbiting 360 camera motion',
-        voiceoverText: isNepali
-          ? 'र यहीँबाट सुरु हुन्छ एउटा कहिल्यै नटुङ्गिने प्रेमको यात्रा...'
-          : 'And here, a new journey begins—one that will resonate forever.',
-        soundEffects: 'Uplifting crescendo, deep cinematic sub-drop, soft rain clearing',
-        musicMood: 'Full orchestral and modern lo-fi acoustic beat drop',
-        previewColor: '#1e1b4b'
-      }
-    ];
-
-    res.json({
-      summary: `High-fidelity ${style || 'Cinematic'} production plan crafted for "${name || 'Creative Story'}", tuned for viewer retention and emotional resonance.`,
-      fullScript: fallbackScenes.map(s => `[${s.timeRange}] ${s.voiceoverText}`).join('\n\n'),
-      scenes: fallbackScenes
-    });
+    return res.json(parsed);
   } catch (err: any) {
-    res.status(500).json({ error: 'Generation failed. Please try again.', details: err?.message });
+    console.error('Video plan generation failed:', err);
+    const errMsg = String(err?.message || err);
+    return res.status(503).json({
+      error: 'AI service is temporarily unavailable.',
+      details: errMsg.includes('API_KEY_INVALID') || errMsg.includes('403')
+        ? 'The configured GEMINI_API_KEY is invalid or unauthorized.'
+        : 'The AI model request failed. Please try again with a descriptive prompt.'
+    });
   }
 });
 
 // AI Shorts Creator Plan
-app.post('/api/ai/shorts-plan', async (req, res) => {
+apiRouter.post(['/ai/shorts-plan', '/api/ai/shorts-plan'], async (req, res) => {
   try {
     const { topic, hook, script, visualStyle, voice, music, captionStyle } = req.body;
-    const ai = getGeminiClient();
+    if (!topic || typeof topic !== 'string' || topic.trim() === '') {
+      return res.status(400).json({ error: 'Topic is required for Shorts generation.' });
+    }
 
-    if (ai) {
-      try {
-        const prompt = `You are a vertical video director for Kiran AI Video Studio.
+    const ai = getGeminiClient();
+    if (!ai) {
+      return res.status(503).json({
+        error: 'AI configuration is missing.',
+        details: 'GEMINI_API_KEY is not configured in Vercel project environment variables. Please add GEMINI_API_KEY in Vercel Project Settings > Environment Variables.'
+      });
+    }
+
+    const prompt = `You are a vertical video director for Kiran AI Video Studio.
 Generate an ultra-retention 9:16 vertical short script and production plan for:
 Topic: "${topic}"
 Initial Hook: "${hook || ''}"
@@ -283,68 +243,39 @@ Respond ONLY with valid JSON in this exact structure without markdown backticks:
   "musicMood": "Fast-paced rhythmic beat with subtle builds"
 }`;
 
-        const text = await generateGeminiContentWithFallback(ai, prompt);
-        const cleaned = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
-        return res.json(JSON.parse(cleaned));
-      } catch {
-        // High-retention vertical shorts studio fallback activates seamlessly
-      }
-    }
+    const text = await generateGeminiContentWithFallback(ai, prompt);
+    const parsed = extractJsonFromText(text);
 
-    // Programmatic fallback
-    const resolvedHook = hook && hook.trim() !== '' 
-      ? hook 
-      : `Stop scrolling if you want to master ${topic || 'video creation'} in 30 seconds!`;
-
-    res.json({
-      hook: resolvedHook,
-      script: `${resolvedHook} Here is the secret that 99% of creators overlook. When you optimize your hook in the first 3 seconds, viewers stay 4 times longer. Watch till the end because the last tip changes everything!`,
-      scenePlan: [
-        {
-          secondRange: '0 - 3s',
-          action: 'Dynamic finger snap to camera with rapid zoom effect',
-          onScreenText: 'STOP SCROLLING 🚨',
-          cameraAngle: 'Extreme close up snap'
-        },
-        {
-          secondRange: '3 - 12s',
-          action: 'Split screen showing before vs after retention graph',
-          onScreenText: 'THE 3-SECOND SECRET ⚡',
-          cameraAngle: 'Handheld dynamic punch'
-        },
-        {
-          secondRange: '12 - 24s',
-          action: 'Demonstration of scene planning in Kiran AI Video Studio',
-          onScreenText: 'STRUCTURE IN SECONDS 🎬',
-          cameraAngle: 'Top-down desk view'
-        },
-        {
-          secondRange: '24 - 30s',
-          action: 'Creator pointing directly to the subscribe badge with animated bell icon',
-          onScreenText: 'TRY IT FREE TODAY 🚀',
-          cameraAngle: 'Front-facing wide portrait'
-        }
-      ],
-      captionText: `Transform your ideas into vertical Shorts in seconds with Kiran AI Video Studio! 🎬 Which tip was your favorite? Comment below! 👇`,
-      cta: 'Hit Subscribe and save this plan for your next video!',
-      title: `${topic || 'Viral Shorts'} - 3-Second Retention Breakdown`,
-      hashtags: ['#Shorts', '#CreatorEconomy', '#AIVideo', '#KiranAIVideoStudio'],
-      musicMood: '128 BPM electronic baseline with crisp percussive clicks'
-    });
+    return res.json(parsed);
   } catch (err: any) {
-    res.status(500).json({ error: 'Shorts generation failed. Please try again.' });
+    console.error('Shorts generation failed:', err);
+    const errMsg = String(err?.message || err);
+    return res.status(503).json({
+      error: 'AI service is temporarily unavailable.',
+      details: errMsg.includes('API_KEY_INVALID') || errMsg.includes('403')
+        ? 'The configured GEMINI_API_KEY is invalid or unauthorized.'
+        : 'The AI model request failed. Please try again with a descriptive topic.'
+    });
   }
 });
 
 // AI Content Assistant (All Deliverables + SEO Analysis)
-app.post('/api/ai/content-assistant', async (req, res) => {
+apiRouter.post(['/ai/content-assistant', '/api/ai/content-assistant'], async (req, res) => {
   try {
     const { prompt: userIdea, videoType, targetAudience, language, mainKeyword } = req.body;
-    const ai = getGeminiClient();
+    if (!userIdea || typeof userIdea !== 'string' || userIdea.trim() === '') {
+      return res.status(400).json({ error: 'Video prompt or concept is required.' });
+    }
 
-    if (ai) {
-      try {
-        const prompt = `You are Kiran AI Video Studio's YouTube SEO & Content Strategist.
+    const ai = getGeminiClient();
+    if (!ai) {
+      return res.status(503).json({
+        error: 'AI configuration is missing.',
+        details: 'GEMINI_API_KEY is not configured in Vercel project environment variables. Please add GEMINI_API_KEY in Vercel Project Settings > Environment Variables.'
+      });
+    }
+
+    const prompt = `You are Kiran AI Video Studio's YouTube SEO & Content Strategist.
 Analyze this video concept thoroughly:
 Video Idea: "${userIdea}"
 Video Type: "${videoType || 'YouTube Video'}"
@@ -409,128 +340,39 @@ Respond ONLY with valid JSON in this exact structure without markdown backticks:
   }
 }`;
 
-        const text = await generateGeminiContentWithFallback(ai, prompt);
-        const cleaned = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
-        return res.json(JSON.parse(cleaned));
-      } catch {
-        // Fallback activates
-      }
-    }
+    const text = await generateGeminiContentWithFallback(ai, prompt);
+    const parsed = extractJsonFromText(text);
 
-    // Programmatic intelligent generator
-    const isNepali = (userIdea || '').toLowerCase().includes('nepal') || (userIdea || '').toLowerCase().includes('kathmandu') || (language || '').toLowerCase().includes('nepal');
-    
-    const title = isNepali
-      ? 'Kathmandu Monsoon Romance (Official Music Video) | Nepali Romantic Song 2026'
-      : `${userIdea || 'Epic Cinematic Story'} | Official 4K Video`;
-
-    res.json({
-      youtubeTitle: title,
-      alternativeTitles: [
-        isNepali ? 'मायाको झरी - A Monsoon Romance in Kathmandu | Official Video' : 'How This Simple Idea Changed Everything (Full Story)',
-        isNepali ? 'Kathmandu Rain & Lost Memories | Acoustic Nepali Love Song' : 'Behind The Scenes: Creating a Cinematic Masterpiece',
-        isNepali ? 'जब काठमाडौँमा झरी पर्छ... | An Emotional Romantic Journey' : 'Top 5 Visual Techniques That Captivate Audiences',
-        'The Secret Behind Stunning Visual Storytelling in 2026',
-        'Official 4K Cinematic Release (Director\'s Cut)'
-      ],
-      youtubeDescription: `Experience "${userIdea || 'Kathmandu Monsoon Romance'}". Produced and directed using modern creator tools on Kiran AI Video Studio.
-
-⏱️ TIMESTAMPS:
-0:00 - Introduction & Monsoon Prelude
-0:45 - The Encounter Under the Pagoda
-1:30 - Whispers in the Rain
-2:15 - Harmonic Crescendo
-3:00 - Closing Reflections & Credits
-
-🎵 CREDITS & PRODUCTION:
-• Production & Story: Kiran AI Video Studio
-• Sound Design & Audio: Master Mixing
-• Visual Color Grading: Teal & Amber Palette
-
-💬 Tell us in the comments: What memory does this video evoke in you? We read and reply to every creator!`,
-      hashtags: [
-        '#KiranAIVideoStudio',
-        isNepali ? '#NepaliMusicVideo' : '#CinematicVideo',
-        isNepali ? '#NepaliRomanticSong' : '#VisualStorytelling',
-        '#4KVideo',
-        '#Creators',
-        '#YouTubeCreator'
-      ],
-      youtubeTags: [
-        'kiran ai video studio',
-        isNepali ? 'nepali song 2026' : 'cinematic video',
-        isNepali ? 'kathmandu monsoon' : 'visual storytelling',
-        'music video',
-        'official video',
-        'sound design',
-        'youtube creator',
-        'emotional story'
-      ],
-      keywords: [
-        isNepali ? 'nepali romantic song' : 'cinematic video',
-        isNepali ? 'kathmandu music video' : 'video editing tutorial',
-        'kiran ai video studio',
-        'youtube optimization',
-        'high retention storytelling'
-      ],
-      thumbnailText: isNepali ? 'मायाको झरी' : 'MUST WATCH',
-      hook: isNepali 
-        ? 'के तपाईँले कहिल्यै काठमाडौँको झरीमा कसैलाई मुटु खोलेर सम्झनुभएको छ? यो भिडियो तपाईँकै लागि हो...'
-        : 'If you only watch one cinematic story this month, make sure it is this one. Notice how the lighting shifts right here...',
-      cta: 'Don\'t forget to hit like, subscribe to the channel, and share this with someone who appreciates heartfelt storytelling.',
-      disclaimer: 'Notice: This audio-visual production was conceptualized and planned through Kiran AI Video Studio. All artistic narrative rights and intellectual property remain with the creator.',
-      shortsCaption: '🌧️ Under the rain, some stories never fade... Watch the full video on YouTube! #Shorts #KiranStudio',
-      tiktokCaption: 'That monsoon feeling hits different... ☔✨ #fyp #video #cinematic',
-      facebookCaption: 'We are thrilled to unveil our latest visual masterpiece! Watch now on YouTube and let us know your thoughts in the comments below.',
-      pinnedComment: '❤️ Thank you all for the support! Which scene touched your heart the most? Let us know below! 👇',
-      communityPost: '🎉 New Release Alert! Our latest video is now streaming. Head over to the channel and watch in full 4K!',
-      seoAnalysis: {
-        score: 92,
-        keywordRelevance: {
-          score: 94,
-          explanation: 'Target keywords directly match organic search queries and video metadata.'
-        },
-        searchIntent: {
-          score: 90,
-          explanation: 'Accurately aligns with user search intent for visual storytelling.'
-        },
-        titleClarity: {
-          score: 95,
-          explanation: 'Clear, concise headline within 65 characters with strong thematic clarity.'
-        },
-        descriptionQuality: {
-          score: 91,
-          explanation: 'Includes structured timestamps, natural keyword density, and comment hooks.'
-        },
-        keywordCoverage: {
-          score: 89,
-          explanation: 'Covers primary head terms and long-tail variations.'
-        },
-        readability: {
-          score: 93,
-          explanation: 'Scannable formatting, bullet points, clean whitespace, and accessible language.'
-        },
-        audienceRelevance: {
-          score: 92,
-          explanation: 'Directly addresses creator community with specific emotional resonance.'
-        },
-        overallAssessment: 'Strong, balanced SEO foundation. The metadata establishes topical authority without relying on keyword stuffing or misleading clickbait.'
-      }
-    });
+    return res.json(parsed);
   } catch (err: any) {
-    res.status(500).json({ error: 'Content optimization failed. Please try again.' });
+    console.error('Content assistant generation failed:', err);
+    const errMsg = String(err?.message || err);
+    return res.status(503).json({
+      error: 'AI service is temporarily unavailable.',
+      details: errMsg.includes('API_KEY_INVALID') || errMsg.includes('403')
+        ? 'The configured GEMINI_API_KEY is invalid or unauthorized.'
+        : 'The AI model request failed. Please try again with a descriptive prompt.'
+    });
   }
 });
 
 // Thumbnail Concept Generation
-app.post('/api/ai/thumbnail-concept', async (req, res) => {
+apiRouter.post(['/ai/thumbnail-concept', '/api/ai/thumbnail-concept'], async (req, res) => {
   try {
     const { idea, title, style, aspectRatio } = req.body;
-    const ai = getGeminiClient();
+    if (!idea || typeof idea !== 'string' || idea.trim() === '') {
+      return res.status(400).json({ error: 'Thumbnail idea is required.' });
+    }
 
-    if (ai) {
-      try {
-        const prompt = `You are Kiran AI Video Studio's master thumbnail designer.
+    const ai = getGeminiClient();
+    if (!ai) {
+      return res.status(503).json({
+        error: 'AI configuration is missing.',
+        details: 'GEMINI_API_KEY is not configured in Vercel project environment variables. Please add GEMINI_API_KEY in Vercel Project Settings > Environment Variables.'
+      });
+    }
+
+    const prompt = `You are Kiran AI Video Studio's master thumbnail designer.
 Create a high CTR thumbnail concept for:
 Idea: "${idea}"
 Main Title: "${title || ''}"
@@ -549,31 +391,24 @@ Respond ONLY with valid JSON in this exact structure without markdown backticks:
   "style": "${style || 'Viral'}"
 }`;
 
-        const text = await generateGeminiContentWithFallback(ai, prompt);
-        const cleaned = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
-        return res.json(JSON.parse(cleaned));
-      } catch {
-        // Fallback
-      }
-    }
+    const text = await generateGeminiContentWithFallback(ai, prompt);
+    const parsed = extractJsonFromText(text);
 
-    res.json({
-      concept: `High contrast ${style || 'cinematic'} thumbnail featuring subject with emotional expression on the right third and bold headline typography on the left.`,
-      layoutDescription: 'Right 40%: Hero character gaze looking toward left copy. Left 60%: High contrast bold sans-serif text with amber drop shadow.',
-      mainHeadline: (title || 'VIRAL SECRETS').toUpperCase().slice(0, 20),
-      subHeadline: 'OFFICIAL 4K',
-      colorPalette: ['#6366F1', '#06B6D4', '#F59E0B', '#111827'],
-      badgeText: 'MUST WATCH',
-      imagePrompt: `Cinematic commercial photography, high detail portrait related to ${idea || 'dramatic story'}, dramatic rim lighting, shallow depth of field, 8k resolution, rule of thirds, award-winning shot.`,
-      style: style || 'Viral-style creator thumbnail'
-    });
+    return res.json(parsed);
   } catch (err: any) {
-    res.status(500).json({ error: 'Thumbnail concept generation failed.' });
+    console.error('Thumbnail concept generation failed:', err);
+    const errMsg = String(err?.message || err);
+    return res.status(503).json({
+      error: 'AI service is temporarily unavailable.',
+      details: errMsg.includes('API_KEY_INVALID') || errMsg.includes('403')
+        ? 'The configured GEMINI_API_KEY is invalid or unauthorized.'
+        : 'The AI model request failed. Please try again with a descriptive thumbnail idea.'
+    });
   }
 });
 
 // AI Website Guide Endpoint
-app.post('/api/ai/guide', async (req, res) => {
+apiRouter.post(['/ai/guide', '/api/ai/guide'], async (req, res) => {
   try {
     const { message, history } = req.body;
     const userMessage = (message || '').trim();
@@ -926,7 +761,7 @@ ${formattedHistory ? `PREVIOUS CONVERSATION:\n${formattedHistory}\n\n` : ''}LATE
 
 
 // Video Generation Job Endpoints
-app.post('/api/video/jobs', async (req, res) => {
+apiRouter.post(['/video/jobs', '/api/video/jobs'], async (req, res) => {
   try {
     const job = await VideoGenerationService.startJob(req.body);
     res.json(job);
@@ -935,7 +770,12 @@ app.post('/api/video/jobs', async (req, res) => {
   }
 });
 
-// Explicit 404 Handler for API endpoints
+// Mount the API Router at both '/api' and root '/'
+// This guarantees that requests with or without the '/api' prefix (e.g. from Vercel rewrites or direct fetch) always resolve correctly.
+app.use('/api', apiRouter);
+app.use('/', apiRouter);
+
+// Explicit 404 Handler for unrecognized /api endpoints
 app.use('/api', (req, res) => {
   res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.originalUrl || req.url}` });
 });

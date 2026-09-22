@@ -79,7 +79,31 @@ export class StudioApiService {
     return this.getStored<VideoTemplate[]>(STORAGE_KEYS.TEMPLATES, INITIAL_TEMPLATES);
   }
 
-  // Server API calls with fallback
+  // Server API calls with clear error reporting
+  private static async parseError(res: Response, defaultMessage: string): Promise<string> {
+    try {
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const data = await res.json();
+        if (data && typeof data === 'object') {
+          const err = typeof data.error === 'string' ? data.error : '';
+          const details = typeof data.details === 'string' ? data.details : '';
+          if (err && details) return `${err} ${details}`;
+          if (err) return err;
+          if (details) return details;
+          if (typeof data.message === 'string') return data.message;
+        }
+      }
+      const text = await res.text();
+      if (text && !text.includes('<!DOCTYPE') && text.length < 200) {
+        return text.trim();
+      }
+    } catch {
+      // Fallback
+    }
+    return `${defaultMessage} (Status ${res.status})`;
+  }
+
   static async generateVideoPlan(params: {
     name: string;
     idea: string;
@@ -97,8 +121,8 @@ export class StudioApiService {
       body: JSON.stringify(params)
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Failed to generate video plan');
+      const errorMsg = await this.parseError(res, 'Failed to generate video plan');
+      throw new Error(errorMsg);
     }
     return await res.json();
   }
@@ -118,8 +142,8 @@ export class StudioApiService {
       body: JSON.stringify(params)
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Failed to generate Shorts plan');
+      const errorMsg = await this.parseError(res, 'Failed to generate Shorts plan');
+      throw new Error(errorMsg);
     }
     return await res.json();
   }
@@ -137,8 +161,8 @@ export class StudioApiService {
       body: JSON.stringify(params)
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Failed to generate content pack');
+      const errorMsg = await this.parseError(res, 'Failed to generate content pack');
+      throw new Error(errorMsg);
     }
     return await res.json();
   }
@@ -155,8 +179,8 @@ export class StudioApiService {
       body: JSON.stringify(params)
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Failed to generate thumbnail concept');
+      const errorMsg = await this.parseError(res, 'Failed to generate thumbnail concept');
+      throw new Error(errorMsg);
     }
     return await res.json();
   }
@@ -171,8 +195,8 @@ export class StudioApiService {
       body: JSON.stringify(params)
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Failed to reach AI Website Guide');
+      const errorMsg = await this.parseError(res, 'Failed to reach AI Website Guide');
+      throw new Error(errorMsg);
     }
     return await res.json();
   }
