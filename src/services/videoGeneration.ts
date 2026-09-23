@@ -90,7 +90,7 @@ export class VideoGenerationService {
       let visualPrompt = params.idea;
       try {
         const scriptResponse = await ai.models.generateContent({
-          model: 'gemini-3.6-flash',
+          model: 'gemini-3.1-flash-lite',
           contents: scriptPrompt
         });
         if (scriptResponse.text) {
@@ -114,7 +114,7 @@ export class VideoGenerationService {
 
       // Wait 10 seconds before polling to avoid early quota errors, though op is returned immediately usually.
       let op = await ai.models.generateVideos({
-        model: 'veo-3.1-generate-preview',
+        model: 'veo-3.1-lite-generate-preview',
         source: {
           prompt: visualPrompt
         },

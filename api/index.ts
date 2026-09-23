@@ -1,5 +1,7 @@
-import app from '../server.ts';
+import app from './_app.ts';
 
-export default app;
+export default function handler(req: any, res: any) {
+  return app(req, res);
+}
+
 export { app };
-
