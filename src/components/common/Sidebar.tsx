@@ -14,7 +14,8 @@ import {
   Mail,
   Info,
   HelpCircle,
-  ExternalLink
+  ExternalLink,
+  BookOpen
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -32,6 +33,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const mainNavItems = [
     { id: 'landing', label: 'Studio Home', icon: Home },
+    { id: 'articles', label: 'Creator Guides', icon: BookOpen, badge: '30' },
     { id: 'ai-guide', label: 'AI Website Guide', icon: Compass, badge: 'Guide' },
     { id: 'video-generator', label: 'AI Video Planner', icon: Video, badge: 'AI' },
     { id: 'shorts-creator', label: 'Shorts Creator', icon: Film, badge: '9:16' },

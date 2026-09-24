@@ -94,6 +94,18 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate, currentRoute, classN
             <ul className="space-y-2 text-xs">
               <li>
                 <button
+                  id="footer-link-articles"
+                  onClick={() => onNavigate('articles')}
+                  className={`hover:text-white transition-colors flex items-center gap-1.5 text-left ${
+                    currentRoute === 'articles' || currentRoute === 'article-detail' ? 'text-indigo-400 font-bold' : 'text-slate-300'
+                  }`}
+                >
+                  <Sparkles className="w-3.5 h-3.5 shrink-0 text-cyan-400" />
+                  <span className="font-semibold text-white">AI Creator Guides (30)</span>
+                </button>
+              </li>
+              <li>
+                <button
                   id="footer-link-how-to-use"
                   onClick={() => onNavigate('how-to-use')}
                   className={`hover:text-white transition-colors flex items-center gap-1.5 text-left ${

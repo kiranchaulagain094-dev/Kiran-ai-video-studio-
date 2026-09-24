@@ -206,3 +206,66 @@ export interface AIGuideChatMessage {
   imageUrl?: string;
 }
 
+export interface ArticleStep {
+  stepNumber: number;
+  stepTitle: string;
+  stepContent: string;
+  example?: string;
+}
+
+export interface ArticleExample {
+  title: string;
+  inputOrContext: string;
+  outputOrDemonstration: string;
+  explanation: string;
+}
+
+export interface ArticleMistake {
+  mistake: string;
+  whyItFails: string;
+  fix: string;
+}
+
+export interface ArticleFAQ {
+  question: string;
+  answer: string;
+}
+
+export interface ArticleTargetTool {
+  route: string; // 'video-generator' | 'shorts-creator' | 'content-assistant' | 'thumbnail-maker' | 'ai-guide'
+  name: string;
+  description: string;
+  buttonLabel?: string;
+  prefillContext?: {
+    tab?: 'youtube' | 'writing' | 'power-suite' | 'seo';
+    toolType?: string;
+    writingTool?: string;
+    topic?: string;
+    language?: string;
+    prompt?: string;
+  };
+}
+
+export interface Article {
+  id: string;
+  slug: string;
+  topicNumber: number;
+  title: string;
+  englishTitle: string;
+  category: 'Script & Storytelling' | 'Titles & Metadata' | 'Thumbnail & Visuals' | 'Shorts & Social' | 'SEO & Growth' | 'Workflow & Strategy' | 'Beginner Guides';
+  readTime: string;
+  publishedDate: string;
+  updatedDate: string;
+  metaDescription: string;
+  keywords: string[];
+  targetTool: ArticleTargetTool;
+  introduction: string;
+  stepByStep: ArticleStep[];
+  practicalExamples: ArticleExample[];
+  proTips: string[];
+  commonMistakes: ArticleMistake[];
+  faqs: ArticleFAQ[];
+  summary: string;
+  relatedArticleSlugs: string[];
+}
+

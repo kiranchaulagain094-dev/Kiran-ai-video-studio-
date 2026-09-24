@@ -17,7 +17,8 @@ import {
   Compass,
   FileText,
   Mail,
-  Play
+  Play,
+  BookOpen
 } from 'lucide-react';
 import { Footer } from '../common/Footer';
 
@@ -37,6 +38,15 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   };
 
   const featureCards = [
+    {
+      id: 'articles',
+      title: 'AI Creator Guides (30)',
+      subtitle: 'Complete Educational Knowledge Base',
+      description: '30 original, in-depth guides covering scripting, high-CTR titles, thumbnail psychology, Shorts hooks, and SEO in Nepali and English.',
+      icon: BookOpen,
+      color: 'from-fuchsia-600 to-indigo-600',
+      badge: '30 Guides'
+    },
     {
       id: 'ai-guide',
       title: 'AI Website Guide',

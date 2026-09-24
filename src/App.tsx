@@ -22,6 +22,9 @@ import { TermsOfService } from './components/legal/TermsOfService';
 import { CookiePolicy } from './components/legal/CookiePolicy';
 import { Disclaimer } from './components/legal/Disclaimer';
 import { ContactUs } from './components/legal/ContactUs';
+import { ArticlesHub } from './components/articles/ArticlesHub';
+import { ArticleDetail } from './components/articles/ArticleDetail';
+import { ALL_ARTICLES, getArticleBySlug } from './data/articles';
 import { Project } from './types';
 import { StudioApiService } from './services/api';
 import { 
@@ -36,54 +39,109 @@ import {
   HardDrive
 } from 'lucide-react';
 
-// SPA Route Path Mapping for clean browser URL history & hosting
-const pathToRoute = (pathname: string): string => {
+// SPA Route & Slug Parser for clean browser URL history & serverless hosting
+const parsePath = (pathname: string): { route: string; slug?: string } => {
   const clean = pathname.toLowerCase().replace(/^\/+|\/+$/g, '');
-  if (!clean || clean === 'home' || clean === 'dashboard' || clean === 'landing') return 'landing';
-  if (clean === 'projects' || clean === 'project') return 'projects';
-  if (clean === 'ai-guide' || clean === 'guide' || clean === 'website-guide' || clean === 'assistant-guide') return 'ai-guide';
-  if (clean === 'settings' || clean === 'setting') return 'settings';
-  if (clean === 'video-generator' || clean === 'generator' || clean === 'generate') return 'video-generator';
-  if (clean === 'shorts-creator' || clean === 'shorts' || clean === 'reels') return 'shorts-creator';
-  if (clean === 'video-editor' || clean === 'editor') return 'video-editor';
-  if (clean === 'content-assistant' || clean === 'seo' || clean === 'assistant') return 'content-assistant';
-  if (clean === 'thumbnail-maker' || clean === 'thumbnail') return 'thumbnail-maker';
-  if (clean === 'music-video' || clean === 'music') return 'music-video';
-  if (clean === 'templates' || clean === 'template') return 'templates';
-  if (clean === 'about-us' || clean === 'about') return 'about-us';
-  if (clean === 'how-to-use' || clean === 'how' || clean === 'instructions') return 'how-to-use';
-  if (clean === 'ai-tools-guide' || clean === 'tools-guide' || clean === 'model-guide') return 'ai-tools-guide';
-  if (clean === 'faq' || clean === 'faqs' || clean === 'help') return 'faq';
-  if (clean === 'contact-us' || clean === 'contact') return 'contact-us';
-  if (clean === 'privacy-policy' || clean === 'privacy') return 'privacy-policy';
-  if (clean === 'terms-of-service' || clean === 'terms') return 'terms-of-service';
-  if (clean === 'cookie-policy' || clean === 'cookies') return 'cookie-policy';
-  if (clean === 'disclaimer') return 'disclaimer';
-  return 'landing';
+  if (!clean || clean === 'home' || clean === 'dashboard' || clean === 'landing') return { route: 'landing' };
+  
+  if (clean === 'articles' || clean === 'guides' || clean === 'creator-guides' || clean === 'article') {
+    return { route: 'articles' };
+  }
+  
+  if (clean.startsWith('articles/') || clean.startsWith('article/') || clean.startsWith('guides/')) {
+    const parts = clean.split('/');
+    if (parts.length > 1 && parts[1]) {
+      return { route: 'article-detail', slug: parts[1] };
+    }
+    return { route: 'articles' };
+  }
+
+  // Check if direct slug matches any of our 30 articles
+  const matched = getArticleBySlug(clean);
+  if (matched) {
+    return { route: 'article-detail', slug: matched.slug };
+  }
+
+  if (clean === 'projects' || clean === 'project') return { route: 'projects' };
+  if (clean === 'ai-guide' || clean === 'guide' || clean === 'website-guide' || clean === 'assistant-guide') return { route: 'ai-guide' };
+  if (clean === 'settings' || clean === 'setting') return { route: 'settings' };
+  if (clean === 'video-generator' || clean === 'generator' || clean === 'generate') return { route: 'video-generator' };
+  if (clean === 'shorts-creator' || clean === 'shorts' || clean === 'reels') return { route: 'shorts-creator' };
+  if (clean === 'video-editor' || clean === 'editor') return { route: 'video-editor' };
+  if (clean === 'content-assistant' || clean === 'seo' || clean === 'assistant') return { route: 'content-assistant' };
+  if (clean === 'thumbnail-maker' || clean === 'thumbnail') return { route: 'thumbnail-maker' };
+  if (clean === 'music-video' || clean === 'music') return { route: 'music-video' };
+  if (clean === 'templates' || clean === 'template') return { route: 'templates' };
+  if (clean === 'about-us' || clean === 'about') return { route: 'about-us' };
+  if (clean === 'how-to-use' || clean === 'how' || clean === 'instructions') return { route: 'how-to-use' };
+  if (clean === 'ai-tools-guide' || clean === 'tools-guide' || clean === 'model-guide') return { route: 'ai-tools-guide' };
+  if (clean === 'faq' || clean === 'faqs' || clean === 'help') return { route: 'faq' };
+  if (clean === 'contact-us' || clean === 'contact') return { route: 'contact-us' };
+  if (clean === 'privacy-policy' || clean === 'privacy') return { route: 'privacy-policy' };
+  if (clean === 'terms-of-service' || clean === 'terms') return { route: 'terms-of-service' };
+  if (clean === 'cookie-policy' || clean === 'cookies') return { route: 'cookie-policy' };
+  if (clean === 'disclaimer') return { route: 'disclaimer' };
+  return { route: 'landing' };
 };
 
-const routeToPath = (route: string): string => {
+const routeToPath = (route: string, slug?: string): string => {
   if (route === 'landing') return '/';
+  if (route === 'articles') return '/articles';
+  if (route === 'article-detail' && slug) return `/articles/${slug}`;
   return `/${route}`;
 };
 
 export default function App() {
-  const [currentRoute, setCurrentRoute] = useState<string>(() => {
-    return pathToRoute(window.location.pathname);
-  });
+  const initialParsed = parsePath(window.location.pathname);
+  const [currentRoute, setCurrentRoute] = useState<string>(initialParsed.route);
+  const [currentArticleSlug, setCurrentArticleSlug] = useState<string>(
+    initialParsed.slug || 'ai-youtube-video-script'
+  );
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
+  // Content Assistant prefill context from educational articles
+  const [assistantPrefill, setAssistantPrefill] = useState<{
+    tab?: 'youtube' | 'writing' | 'power-suite' | 'seo';
+    writingTool?: string;
+    powerTool?: 'ideas' | 'calendar' | 'script' | 'prompt' | 'shorts-caption';
+    language?: string;
+    topic?: string;
+    prompt?: string;
+  }>({});
+
   // Cross-route navigation with browser history update
-  const navigateTo = (route: string) => {
+  const navigateTo = (route: string, slug?: string, prefillContext?: any) => {
     const targetRoute = route === 'dashboard' ? 'landing' : route;
+    
+    if (targetRoute === 'article-detail') {
+      const activeSlug = slug || currentArticleSlug;
+      setCurrentArticleSlug(activeSlug);
+    }
+
+    if (prefillContext) {
+      if (prefillContext.prompt && (targetRoute === 'video-generator' || targetRoute === 'shorts-creator')) {
+        setInitialGeneratorPrompt(prefillContext.prompt);
+      }
+      if (targetRoute === 'content-assistant') {
+        setAssistantPrefill({
+          tab: prefillContext.tab,
+          writingTool: prefillContext.writingTool,
+          powerTool: prefillContext.toolType || prefillContext.powerTool,
+          language: prefillContext.language,
+          topic: prefillContext.topic,
+          prompt: prefillContext.prompt
+        });
+      }
+    }
+
     setCurrentRoute(targetRoute);
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
-    const targetPath = routeToPath(targetRoute);
+    const targetPath = routeToPath(targetRoute, slug || currentArticleSlug);
     if (window.location.pathname !== targetPath) {
       try {
-        window.history.pushState({ route: targetRoute }, '', targetPath);
+        window.history.pushState({ route: targetRoute, slug }, '', targetPath);
       } catch {
         // Fallback for isolated iframe environments
       }
@@ -93,8 +151,11 @@ export default function App() {
   // Sync route on browser Back/Forward (popstate)
   useEffect(() => {
     const handlePopState = () => {
-      const targetRoute = pathToRoute(window.location.pathname);
-      setCurrentRoute(targetRoute);
+      const parsed = parsePath(window.location.pathname);
+      setCurrentRoute(parsed.route);
+      if (parsed.slug) {
+        setCurrentArticleSlug(parsed.slug);
+      }
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -169,6 +230,8 @@ export default function App() {
     'contact-us'
   ].includes(currentRoute);
 
+  const isArticleRoute = currentRoute === 'articles' || currentRoute === 'article-detail';
+
   return (
     <div className="min-h-screen bg-[#090b10] text-slate-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
       {/* Top Header */}
@@ -194,8 +257,8 @@ export default function App() {
 
         {/* Main Content Area */}
         <main className={`flex-1 overflow-y-auto ${
-          currentRoute === 'landing' || isLegalRoute 
-            ? 'md:ml-64 p-0' 
+          currentRoute === 'landing' || isLegalRoute || isArticleRoute
+            ? 'md:ml-64 p-0 pb-16' 
             : 'md:ml-64 p-4 sm:p-6 lg:p-8 pb-24 md:pb-12'
         }`}>
           {/* Landing / Home View */}
@@ -208,6 +271,26 @@ export default function App() {
               onSelectFeature={(featureRoute) => {
                 navigateTo(featureRoute);
               }}
+            />
+          )}
+
+          {/* AI Creator Guides & Articles Hub (30 Original Guides) */}
+          {currentRoute === 'articles' && (
+            <ArticlesHub
+              onSelectArticle={(slug) => navigateTo('article-detail', slug)}
+              onOpenTool={(toolRoute, ctx) => navigateTo(toolRoute, undefined, ctx)}
+              onNavigateHome={() => navigateTo('landing')}
+            />
+          )}
+
+          {/* Individual Article Reader View */}
+          {currentRoute === 'article-detail' && (
+            <ArticleDetail
+              article={getArticleBySlug(currentArticleSlug) || ALL_ARTICLES[0]}
+              onNavigateBack={() => navigateTo('articles')}
+              onSelectArticle={(slug) => navigateTo('article-detail', slug)}
+              onOpenTool={(toolRoute, ctx) => navigateTo(toolRoute, undefined, ctx)}
+              onNavigateHome={() => navigateTo('landing')}
             />
           )}
 
@@ -302,7 +385,14 @@ export default function App() {
 
           {/* AI Content & SEO Assistant */}
           {currentRoute === 'content-assistant' && (
-            <ContentAssistant initialPrompt={initialAssistantPrompt} />
+            <ContentAssistant 
+              initialPrompt={assistantPrefill.prompt || initialAssistantPrompt}
+              initialTab={assistantPrefill.tab}
+              initialWritingTool={assistantPrefill.writingTool}
+              initialPowerTool={assistantPrefill.powerTool}
+              initialLanguage={assistantPrefill.language}
+              initialTopic={assistantPrefill.topic}
+            />
           )}
 
           {/* Thumbnail Concept Maker */}
@@ -614,7 +704,7 @@ export default function App() {
             <Footer 
               onNavigate={navigateTo} 
               currentRoute={currentRoute} 
-              className={isLegalRoute ? 'mt-0 border-t-0' : 'mt-12'} 
+              className={isLegalRoute || isArticleRoute ? 'mt-0 border-t-0' : 'mt-12'} 
             />
           )}
 

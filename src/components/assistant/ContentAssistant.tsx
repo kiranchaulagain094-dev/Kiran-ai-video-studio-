@@ -34,6 +34,11 @@ interface ContentAssistantProps {
   initialPrompt?: string;
   initialTitle?: string;
   initialDescription?: string;
+  initialTab?: 'youtube' | 'writing' | 'power-suite' | 'seo';
+  initialWritingTool?: string;
+  initialPowerTool?: 'ideas' | 'calendar' | 'script' | 'prompt' | 'shorts-caption';
+  initialLanguage?: string;
+  initialTopic?: string;
 }
 
 interface TitleFormula {
@@ -45,36 +50,62 @@ interface TitleFormula {
 export const ContentAssistant: React.FC<ContentAssistantProps> = ({ 
   initialPrompt,
   initialTitle,
-  initialDescription 
+  initialDescription,
+  initialTab,
+  initialWritingTool,
+  initialPowerTool,
+  initialLanguage,
+  initialTopic
 }) => {
-  const [activeTab, setActiveTab] = useState<'youtube' | 'writing' | 'power-suite' | 'seo'>('youtube');
+  const [activeTab, setActiveTab] = useState<'youtube' | 'writing' | 'power-suite' | 'seo'>(
+    initialTab || 'youtube'
+  );
 
   // Inputs
   const [prompt, setPrompt] = useState(
-    initialPrompt || initialTitle || 'AI version of a Nepali romantic song for my YouTube channel.'
+    initialPrompt || initialTopic || initialTitle || 'AI version of a Nepali romantic song for my YouTube channel.'
   );
   const [videoType, setVideoType] = useState('Music Video');
   const [targetAudience, setTargetAudience] = useState('Nepali Music Lovers, Creators & Global Audiences');
-  const [language, setLanguage] = useState('Nepali');
+  const [language, setLanguage] = useState(initialLanguage || 'Nepali');
   const [mainKeyword, setMainKeyword] = useState('Nepali romantic song 2026');
 
   // Writing Tools State
   const [writingInput, setWritingInput] = useState(
-    'In this video, I will show you the best romantic places in Kathmandu during monsoon and why they make you feel so peaceful.'
+    initialTopic || 'In this video, I will show you the best romantic places in Kathmandu during monsoon and why they make you feel so peaceful.'
   );
   const [writingOutput, setWritingOutput] = useState(
     'When the monsoon rain touches the ancient terracotta of Kathmandu, time slows down. In this cinematic exploration, discover the hidden sanctuaries of the valley where love and stillness meet.'
   );
-  const [activeWritingTool, setActiveWritingTool] = useState<string>('Rewrite');
+  const [activeWritingTool, setActiveWritingTool] = useState<string>(
+    initialWritingTool || 'Rewrite'
+  );
   const [isProcessingWriting, setIsProcessingWriting] = useState(false);
   const [writingError, setWritingError] = useState<string | null>(null);
 
   // Power Suite State (Individual generators)
-  const [powerToolType, setPowerToolType] = useState<'ideas' | 'calendar' | 'script' | 'prompt' | 'shorts-caption'>('ideas');
-  const [powerTopic, setPowerTopic] = useState('Cinematic Travel Vlog through Pokhara and Annapurna');
+  const [powerToolType, setPowerToolType] = useState<'ideas' | 'calendar' | 'script' | 'prompt' | 'shorts-caption'>(
+    initialPowerTool || 'ideas'
+  );
+  const [powerTopic, setPowerTopic] = useState(
+    initialTopic || initialPrompt || 'Cinematic Travel Vlog through Pokhara and Annapurna'
+  );
   const [isGeneratingPower, setIsGeneratingPower] = useState(false);
   const [powerResult, setPowerResult] = useState<any>(null);
   const [powerError, setPowerError] = useState<string | null>(null);
+
+  // Sync props when navigated from an educational article
+  React.useEffect(() => {
+    if (initialTab) setActiveTab(initialTab);
+    if (initialWritingTool) setActiveWritingTool(initialWritingTool);
+    if (initialPowerTool) setPowerToolType(initialPowerTool);
+    if (initialLanguage) setLanguage(initialLanguage);
+    if (initialTopic) {
+      setPrompt(initialTopic);
+      setWritingInput(initialTopic);
+      setPowerTopic(initialTopic);
+    }
+  }, [initialTab, initialWritingTool, initialPowerTool, initialLanguage, initialTopic]);
 
   // Loading & Content states
   const [isGenerating, setIsGenerating] = useState(false);
