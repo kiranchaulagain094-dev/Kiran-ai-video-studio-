@@ -48,13 +48,24 @@ interface SocialRepurposingData {
 
 interface ShortsCreatorProps {
   onOpenEditorWithShorts?: (plan: ShortsGenerationPlan) => void;
+  initialTopic?: string;
+  initialHook?: string;
 }
 
-export const ShortsCreator: React.FC<ShortsCreatorProps> = ({ onOpenEditorWithShorts }) => {
+export const ShortsCreator: React.FC<ShortsCreatorProps> = ({ 
+  onOpenEditorWithShorts, 
+  initialTopic, 
+  initialHook 
+}) => {
   const [activeTab, setActiveTab] = useState<'shorts' | 'repurpose'>('shorts');
 
-  const [topic, setTopic] = useState('Top 3 Visual Editing Tricks for Viral Retention in 2026');
-  const [hook, setHook] = useState('Stop losing viewers in the first 3 seconds!');
+  const [topic, setTopic] = useState(initialTopic || 'Top 3 Visual Editing Tricks for Viral Retention in 2026');
+  const [hook, setHook] = useState(initialHook || 'Stop losing viewers in the first 3 seconds!');
+
+  React.useEffect(() => {
+    if (initialTopic) setTopic(initialTopic);
+    if (initialHook) setHook(initialHook);
+  }, [initialTopic, initialHook]);
   const [script, setScript] = useState('Cut the fluff. Deliver high value in the first second and use dynamic text pop-ups.');
   const [visualStyle, setVisualStyle] = useState('Realistic High-Energy');
   const [voice, setVoice] = useState('Male (Energetic)');

@@ -34,14 +34,27 @@ function extractJsonFromText(rawText: string): any {
       cleaned = match[1].trim();
     }
   }
-  if (!cleaned.startsWith('{') && !cleaned.startsWith('[')) {
-    const firstBrace = cleaned.indexOf('{');
-    const lastBrace = cleaned.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  const firstBracket = cleaned.indexOf('[');
+  const lastBracket = cleaned.lastIndexOf(']');
+
+  if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
+    if (lastBrace !== -1 && lastBrace >= firstBrace) {
       cleaned = cleaned.substring(firstBrace, lastBrace + 1);
     }
+  } else if (firstBracket !== -1 && lastBracket !== -1 && lastBracket >= firstBracket) {
+    cleaned = cleaned.substring(firstBracket, lastBracket + 1);
   }
-  return JSON.parse(cleaned);
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // Lenient fallback for trailing commas
+    const fixed = cleaned.replace(/,\s*([}\]])/g, '$1');
+    return JSON.parse(fixed);
+  }
 }
 
 // Lazy initialization of Gemini Client
@@ -72,8 +85,8 @@ async function generateGeminiContentWithFallback(
 ): Promise<string> {
   // Candidate models with maximum availability across tiers
   const candidateModels = [
-    'gemini-2.5-flash',
-    'gemini-2.0-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-3.6-flash',
     'gemini-3.8-flash',
     'gemini-flash-latest'
   ];
@@ -88,9 +101,9 @@ async function generateGeminiContentWithFallback(
           responseMimeType: 'application/json'
         }
       });
-      // 9 second timeout per candidate
+      // 18 second timeout per candidate
       const timeoutPromise = new Promise<never>((_, reject) => 
-        setTimeout(() => reject(new Error(`Timeout requesting model ${model}`)), 9000)
+        setTimeout(() => reject(new Error(`Timeout requesting model ${model}`)), 18000)
       );
 
       const response = await Promise.race([callPromise, timeoutPromise]);
@@ -120,7 +133,7 @@ async function generateGeminiContentWithFallback(
 }
 
 // System Status & Health Probes
-apiRouter.get(['/', '/health', '/api/health'], (req, res) => {
+apiRouter.get(['/', '/health', '/api/health', '/status'], (req, res) => {
   const hasGemini = Boolean(
     process.env.GEMINI_API_KEY && 
     process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY' &&
@@ -1142,9 +1155,9 @@ apiRouter.get(['/video/jobs/:id', '/api/video/jobs/:id'], async (req, res) => {
   }
 });
 
-// Mount the API Router at both '/api' and root '/'
+// Mount the API Router at '/api' and health endpoint
 app.use('/api', apiRouter);
-app.use('/', apiRouter);
+app.use('/health', apiRouter);
 
 // Explicit 404 Handler for unrecognized API routes
 app.use('/api', (req, res) => {

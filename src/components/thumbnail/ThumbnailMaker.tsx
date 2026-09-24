@@ -34,9 +34,19 @@ export interface ThumbnailPlanDetails {
   style: string;
 }
 
-export const ThumbnailMaker: React.FC = () => {
-  const [idea, setIdea] = useState('Kathmandu monsoon rain with emotional gaze under yellow pagoda');
-  const [mainTitle, setMainTitle] = useState('MAYAKO JHARI');
+interface ThumbnailMakerProps {
+  initialIdea?: string;
+  initialTitle?: string;
+}
+
+export const ThumbnailMaker: React.FC<ThumbnailMakerProps> = ({ initialIdea, initialTitle }) => {
+  const [idea, setIdea] = useState(initialIdea || 'Kathmandu monsoon rain with emotional gaze under yellow pagoda');
+  const [mainTitle, setMainTitle] = useState(initialTitle || 'MAYAKO JHARI');
+
+  React.useEffect(() => {
+    if (initialIdea) setIdea(initialIdea);
+    if (initialTitle) setMainTitle(initialTitle);
+  }, [initialIdea, initialTitle]);
   const [style, setStyle] = useState('Viral-style creator thumbnail');
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16' | '1:1'>('16:9');
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);

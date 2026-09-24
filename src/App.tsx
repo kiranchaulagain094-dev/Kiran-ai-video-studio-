@@ -109,6 +109,8 @@ export default function App() {
     topic?: string;
     prompt?: string;
   }>({});
+  const [shortsPrefill, setShortsPrefill] = useState<{ topic?: string; hook?: string }>({});
+  const [thumbnailPrefill, setThumbnailPrefill] = useState<{ idea?: string; title?: string }>({});
 
   // Cross-route navigation with browser history update
   const navigateTo = (route: string, slug?: string, prefillContext?: any) => {
@@ -120,8 +122,20 @@ export default function App() {
     }
 
     if (prefillContext) {
-      if (prefillContext.prompt && (targetRoute === 'video-generator' || targetRoute === 'shorts-creator')) {
+      if (prefillContext.prompt && targetRoute === 'video-generator') {
         setInitialGeneratorPrompt(prefillContext.prompt);
+      }
+      if (targetRoute === 'shorts-creator') {
+        setShortsPrefill({
+          topic: prefillContext.topic || prefillContext.prompt,
+          hook: prefillContext.hook
+        });
+      }
+      if (targetRoute === 'thumbnail-maker') {
+        setThumbnailPrefill({
+          idea: prefillContext.prompt || prefillContext.idea || prefillContext.topic,
+          title: prefillContext.title
+        });
       }
       if (targetRoute === 'content-assistant') {
         setAssistantPrefill({
@@ -315,6 +329,8 @@ export default function App() {
           {/* Shorts & Reels Creator (9:16) */}
           {currentRoute === 'shorts-creator' && (
             <ShortsCreator
+              initialTopic={shortsPrefill.topic}
+              initialHook={shortsPrefill.hook}
               onOpenEditorWithShorts={(plan) => {
                 const shortsProject: Project = {
                   id: 'short-' + Date.now(),
@@ -397,7 +413,10 @@ export default function App() {
 
           {/* Thumbnail Concept Maker */}
           {currentRoute === 'thumbnail-maker' && (
-            <ThumbnailMaker />
+            <ThumbnailMaker 
+              initialIdea={thumbnailPrefill.idea}
+              initialTitle={thumbnailPrefill.title}
+            />
           )}
 
           {/* My Projects */}
