@@ -7,15 +7,27 @@ import { VideoGenerationService } from '../src/services/videoGeneration.ts';
 
 const app = express();
 
-app.use(express.json({ limit: '20mb' }));
-app.use(express.urlencoded({ extended: true, limit: '20mb' }));
+// CORS Headers for all incoming requests
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  next();
+});
+
+// JSON and URL-encoded body parsers with safety limit
+app.use(express.json({ limit: '25mb' }));
+app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 // Dedicated API Router mounted at both /api and root /
 const apiRouter = express.Router();
 
-// Helper to clean JSON from Gemini output
+// Helper to safely extract JSON from Gemini text responses
 function extractJsonFromText(rawText: string): any {
-  let cleaned = rawText.trim();
+  let cleaned = (rawText || '').trim();
   if (cleaned.includes('```')) {
     const match = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
     if (match && match[1]) {
@@ -44,7 +56,7 @@ function getGeminiClient(): GoogleGenAI | null {
       apiKey,
       httpOptions: {
         headers: {
-          'User-Agent': 'aistudio-build'
+          'User-Agent': 'kiran-ai-video-studio'
         }
       }
     });
@@ -52,27 +64,33 @@ function getGeminiClient(): GoogleGenAI | null {
   return geminiClient;
 }
 
-// Resilient Gemini caller with fast fallback and strict timeouts for Vercel Serverless
+// Resilient Gemini text caller with fallback and timeouts
 async function generateGeminiContentWithFallback(
   ai: GoogleGenAI,
-  prompt: string,
+  promptOrContents: any,
   config?: any
 ): Promise<string> {
-  const candidateModels = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
+  // Candidate models with maximum availability across tiers
+  const candidateModels = [
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-3.8-flash',
+    'gemini-flash-latest'
+  ];
   let lastError: any = null;
 
   for (const model of candidateModels) {
     try {
       const callPromise = ai.models.generateContent({
         model,
-        contents: prompt,
+        contents: promptOrContents,
         config: config || {
           responseMimeType: 'application/json'
         }
       });
-      // 7.5 second timeout per candidate to stay well within Vercel execution window
+      // 9 second timeout per candidate
       const timeoutPromise = new Promise<never>((_, reject) => 
-        setTimeout(() => reject(new Error(`Timeout requesting ${model}`)), 7500)
+        setTimeout(() => reject(new Error(`Timeout requesting model ${model}`)), 9000)
       );
 
       const response = await Promise.race([callPromise, timeoutPromise]);
@@ -82,21 +100,26 @@ async function generateGeminiContentWithFallback(
       }
     } catch (err: any) {
       lastError = err;
-      console.warn(`Gemini candidate model ${model} failed, trying next candidate:`, err?.message || err);
+      console.warn(`Candidate model ${model} encountered an issue:`, err?.message || err);
     }
   }
 
-  const errMsg = lastError?.message || String(lastError || '');
+  const errMsg = String(lastError?.message || lastError || '');
   if (errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('429') || errMsg.includes('quota')) {
-    const customErr: any = new Error('Gemini API quota is temporarily exhausted. Please check your billing or try again in a few moments.');
+    const customErr: any = new Error('Gemini API quota is currently exceeded. Please wait a brief moment and retry.');
     customErr.status = 429;
     throw customErr;
   }
+  if (errMsg.includes('overloaded') || errMsg.includes('503') || errMsg.includes('UNAVAILABLE')) {
+    const customErr: any = new Error('The AI model API is currently experiencing peak traffic. Please retry in a moment.');
+    customErr.status = 503;
+    throw customErr;
+  }
 
-  throw lastError || new Error('All Gemini model candidates were unavailable.');
+  throw lastError || new Error('All AI service candidates were temporarily unavailable. Please retry.');
 }
 
-// System Status & Health
+// System Status & Health Probes
 apiRouter.get(['/', '/health', '/api/health'], (req, res) => {
   const hasGemini = Boolean(
     process.env.GEMINI_API_KEY && 
@@ -114,30 +137,33 @@ apiRouter.get(['/', '/health', '/api/health'], (req, res) => {
       videoPlanner: true,
       shortsCreator: true,
       contentAssistant: true,
+      writingTools: true,
+      contentSuite: true,
       thumbnailMaker: true,
+      thumbnailVisionAnalysis: true,
       musicVideoPlanner: true
     }
   });
 });
 
-// AI Video Plan Generation
+// 1. AI Video Plan Generation
 apiRouter.post(['/ai/video-plan', '/api/ai/video-plan'], async (req, res) => {
   try {
     const { name, idea, type, aspectRatio, duration, style, voice, language, music } = req.body;
     if (!idea || typeof idea !== 'string' || idea.trim() === '') {
-      return res.status(400).json({ error: 'Core video idea prompt is required.' });
+      return res.status(400).json({ success: false, error: 'Video idea prompt is required.' });
     }
 
     const ai = getGeminiClient();
     if (!ai) {
       return res.status(503).json({
-        error: 'AI configuration is missing.',
-        details: 'GEMINI_API_KEY is not configured in Vercel project environment variables. Please add GEMINI_API_KEY in Vercel Project Settings > Environment Variables.'
+        success: false,
+        error: 'Gemini API key is not configured. Please add GEMINI_API_KEY in your environment variables.'
       });
     }
 
     const prompt = `You are a professional video director and screenwriter for Kiran AI Video Studio.
-Create a detailed, high-retention video production screenplay and scene breakdown for:
+Create a production screenplay and scene breakdown for:
 Project Name: "${name || 'Creative Story'}"
 Core Idea: "${idea}"
 Video Type: "${type || 'YouTube Video'}"
@@ -149,31 +175,24 @@ Target Language: "${language || 'English / Nepali'}"
 Music Direction: "${music || 'Inspirational Cinematic'}"
 
 IMPORTANT INSTRUCTIONS:
-1. Divide the video into 4 to 7 coherent sequential scenes with explicit timeRange brackets.
-2. Provide a compelling high-level narrative summary of the video.
-3. Provide the full complete spoken voiceover or narrator script.
-4. For each scene:
-   - sceneNumber (integer)
-   - description (cinematic action description)
-   - visualPrompt (concise image/video generator prompt with lighting and composition details)
-   - timeRange (e.g. "0:00 - 0:45")
-   - cameraAngle (e.g. "Wide Establishing Aerial Shot", "Medium Close-up Tracking Shot")
-   - audioNotes (e.g. "Gentle acoustic guitar swells, distant birds chirping")
-   - narratorText (exact spoken words for this scene)
+1. Divide the video into 4 to 6 sequential scenes with precise time ranges.
+2. Provide a narrative summary and complete voiceover / dialogue script.
+3. For each scene provide: sceneNumber, title, description, visualPrompt (AI image/video prompt), timeRange, cameraMovement, audioNotes, voiceoverText.
 
-Respond ONLY with a valid JSON object matching this schema:
+Respond ONLY with valid JSON:
 {
-  "summary": "High level story and narrative overview",
-  "fullScript": "Complete unbroken voiceover / dialogue script",
+  "summary": "Story summary",
+  "fullScript": "Complete spoken script",
   "scenes": [
     {
       "sceneNumber": 1,
-      "description": "Scene action description",
-      "visualPrompt": "AI Image/Veo Prompt for this shot",
+      "title": "Scene title",
+      "description": "Visual scene description",
+      "visualPrompt": "Detailed AI visual generator prompt",
       "timeRange": "0:00 - 0:30",
-      "cameraAngle": "Camera shot description",
-      "audioNotes": "Sound design notes",
-      "narratorText": "Spoken dialogue"
+      "cameraMovement": "Camera angle and movement",
+      "audioNotes": "Sound effects and music cues",
+      "voiceoverText": "Spoken narrator dialogue"
     }
   ]
 }`;
@@ -181,75 +200,71 @@ Respond ONLY with a valid JSON object matching this schema:
     const text = await generateGeminiContentWithFallback(ai, prompt);
     const parsed = extractJsonFromText(text);
 
-    if (!parsed.summary || !Array.isArray(parsed.scenes)) {
-      throw new Error('Malformed screenplay JSON structure returned by Gemini.');
-    }
-
     return res.json(parsed);
   } catch (err: any) {
-    console.error('Video plan generation error:', err);
+    console.error('Video plan error:', err);
     res.status(err.status === 429 ? 429 : 500).json({
-      error: 'Failed to generate video plan.',
-      details: err?.message || 'Gemini API call failed.'
+      success: false,
+      error: err?.message || 'Failed to generate video plan. Please try again.'
     });
   }
 });
 
-// Shorts & Reels Plan Generation
+// 2. Shorts & Reels Plan Generation
 apiRouter.post(['/ai/shorts-plan', '/api/ai/shorts-plan'], async (req, res) => {
   try {
     const { topic, hook, script, visualStyle, voice, music, captionStyle } = req.body;
     if (!topic || typeof topic !== 'string' || topic.trim() === '') {
-      return res.status(400).json({ error: 'Shorts topic is required.' });
+      return res.status(400).json({ success: false, error: 'Shorts topic is required.' });
     }
 
     const ai = getGeminiClient();
     if (!ai) {
       return res.status(503).json({
-        error: 'AI configuration is missing.',
-        details: 'GEMINI_API_KEY is not configured in Vercel project environment variables.'
+        success: false,
+        error: 'Gemini API key is not configured. Please add GEMINI_API_KEY in your environment variables.'
       });
     }
 
-    const prompt = `You are a viral vertical video strategist specialized in 9:16 YouTube Shorts, Instagram Reels, and TikTok.
-Create an ultra-high retention vertical short plan for:
+    const prompt = `You are a vertical video retention strategist for YouTube Shorts, Reels, and TikTok.
+Create a high-retention 9:16 short plan for:
 Topic: "${topic}"
-Initial Hook Idea: "${hook || 'Pattern interrupt hook'}"
-Draft Notes: "${script || 'Create fresh high-energy script'}"
-Visual Style: "${visualStyle || 'Dynamic Modern'}"
-Voice/Tone: "${voice || 'High-energy & Punchy'}"
-Music Mood: "${music || 'Upbeat energetic rhythm'}"
-Caption Style: "${captionStyle || 'Bold pop-word animations'}"
+Opening Hook Idea: "${hook || 'Pattern interrupt hook'}"
+Draft Notes: "${script || 'Create punchy script'}"
+Visual Style: "${visualStyle || 'Realistic High-Energy'}"
+Voice/Tone: "${voice || 'High-energy'}"
+Music Mood: "${music || '128 BPM Phonk / Trap'}"
+Caption Style: "${captionStyle || 'Bold Animated Pop'}"
 
-Respond ONLY with a valid JSON object matching this schema:
+Respond ONLY with valid JSON matching this schema:
 {
   "hook": "Opening 0-3 second magnetic visual and verbal hook",
   "script": "Complete spoken script under 150 words optimized for 30-45 seconds",
-  "scenes": [
+  "scenePlan": [
     {
-      "secondRange": "0-3s",
+      "secondRange": "0 - 3s",
       "action": "Visual hook action",
       "onScreenText": "BOLD POP TEXT",
-      "cameraAngle": "Extreme close-up snap zoom"
+      "cameraAngle": "Ultra close-up"
     },
     {
-      "secondRange": "3-15s",
-      "action": "Visual development",
-      "onScreenText": "REVEAL FACT",
-      "cameraAngle": "Fast panning shot"
+      "secondRange": "3 - 15s",
+      "action": "Fast visual development",
+      "onScreenText": "KEY INSIGHT",
+      "cameraAngle": "Dynamic front punch"
     },
     {
-      "secondRange": "15-30s",
-      "action": "Call to action climax",
+      "secondRange": "15 - 30s",
+      "action": "Climax and call to action",
       "onScreenText": "SUBSCRIBE FOR MORE",
-      "cameraAngle": "Center frame hero shot"
+      "cameraAngle": "Center frame hero"
     }
   ],
-  "captionText": "Formatted text with emojis and high engagement questions",
-  "cta": "Clear specific call to action",
+  "captionText": "Formatted text with emojis and engagement question",
+  "cta": "Clear call to action",
   "title": "High CTR YouTube Shorts Title",
-  "hashtags": ["#Shorts", "#Viral", "#AIStudio"],
-  "musicMood": "Fast-paced rhythmic beat with subtle builds"
+  "hashtags": ["#Shorts", "#Viral", "#KiranAIVideoStudio"],
+  "musicMood": "128 BPM rhythmic electronic beat"
 }`;
 
     const text = await generateGeminiContentWithFallback(ai, prompt);
@@ -257,68 +272,173 @@ Respond ONLY with a valid JSON object matching this schema:
 
     return res.json(parsed);
   } catch (err: any) {
-    console.error('Shorts plan generation error:', err);
+    console.error('Shorts plan error:', err);
     res.status(err.status === 429 ? 429 : 500).json({
-      error: 'Failed to generate Shorts plan.',
-      details: err?.message || 'Gemini API call failed.'
+      success: false,
+      error: err?.message || 'Failed to generate Shorts plan. Please try again.'
     });
   }
 });
 
-// Content & SEO Assistant
-apiRouter.post(['/ai/content-assistant', '/api/ai/content-assistant'], async (req, res) => {
+// 3. Social Repurposing Pack for Shorts
+apiRouter.post(['/ai/repurpose-shorts', '/api/ai/repurpose-shorts'], async (req, res) => {
   try {
-    const { prompt: userTopic, videoType, targetAudience, language, mainKeyword } = req.body;
-    if (!userTopic || typeof userTopic !== 'string' || userTopic.trim() === '') {
-      return res.status(400).json({ error: 'Video topic or script summary is required.' });
+    const { topic, script } = req.body;
+    if (!topic || typeof topic !== 'string' || topic.trim() === '') {
+      return res.status(400).json({ success: false, error: 'Topic or script is required for repurposing.' });
     }
 
     const ai = getGeminiClient();
     if (!ai) {
       return res.status(503).json({
-        error: 'AI configuration is missing.',
-        details: 'GEMINI_API_KEY is not configured in Vercel project environment variables.'
+        success: false,
+        error: 'Gemini API key is not configured.'
+      });
+    }
+
+    const prompt = `You are a social media repurposing strategist.
+Repurpose this video topic into multiple high-performing assets:
+Topic: "${topic}"
+Script/Notes: "${script || 'Create fresh viral variations'}"
+
+Respond ONLY with valid JSON:
+{
+  "concepts": [
+    {
+      "title": "Concept 1 Title",
+      "angle": "Educational / Direct",
+      "targetPlatform": "YouTube Shorts & Reels",
+      "hook": "Opening hook line",
+      "script": "Complete 30-second script"
+    },
+    {
+      "title": "Concept 2 Title",
+      "angle": "Contrarian / Mythbuster",
+      "targetPlatform": "TikTok & Reels",
+      "hook": "Opening hook line",
+      "script": "Complete 30-second script"
+    },
+    {
+      "title": "Concept 3 Title",
+      "angle": "Behind the Scenes / Story",
+      "targetPlatform": "YouTube Shorts & LinkedIn",
+      "hook": "Opening hook line",
+      "script": "Complete 30-second script"
+    }
+  ],
+  "hookVariations": [
+    { "type": "Negative Bias", "text": "Hook text" },
+    { "type": "Curiosity Gap", "text": "Hook text" },
+    { "type": "Bold Statement", "text": "Hook text" },
+    { "type": "Direct Question", "text": "Hook text" },
+    { "type": "Urgent Secret", "text": "Hook text" }
+  ],
+  "viralAngles": [
+    { "title": "The Contrarian Angle", "explanation": "Explanation" },
+    { "title": "The Fast Solution Angle", "explanation": "Explanation" },
+    { "title": "The Transformation Angle", "explanation": "Explanation" }
+  ],
+  "carouselSlides": [
+    { "slideNumber": 1, "headline": "Cover Headline", "body": "Subtitle" },
+    { "slideNumber": 2, "headline": "Point 1", "body": "Explanation" },
+    { "slideNumber": 3, "headline": "Point 2", "body": "Explanation" },
+    { "slideNumber": 4, "headline": "Point 3", "body": "Explanation" },
+    { "slideNumber": 5, "headline": "Key Takeaway", "body": "Summary" },
+    { "slideNumber": 6, "headline": "Action Call", "body": "CTA" }
+  ]
+}`;
+
+    const text = await generateGeminiContentWithFallback(ai, prompt);
+    const parsed = extractJsonFromText(text);
+
+    return res.json(parsed);
+  } catch (err: any) {
+    console.error('Repurposing error:', err);
+    res.status(err.status === 429 ? 429 : 500).json({
+      success: false,
+      error: err?.message || 'Failed to generate repurposing pack.'
+    });
+  }
+});
+
+// 4. Content Assistant (Full AIContentPack with 10 Title Archetypes & SEO Audit)
+apiRouter.post(['/ai/content-assistant', '/api/ai/content-assistant'], async (req, res) => {
+  try {
+    const { videoType, targetAudience, language, mainKeyword } = req.body;
+    const userTopic = (req.body.prompt || req.body.topic || req.body.idea || '').trim();
+    if (!userTopic) {
+      return res.status(400).json({ success: false, error: 'Video concept or topic is required.' });
+    }
+
+    const ai = getGeminiClient();
+    if (!ai) {
+      return res.status(503).json({
+        success: false,
+        error: 'Gemini API key is not configured.'
       });
     }
 
     const prompt = `You are a YouTube algorithm and SEO optimization specialist for Kiran AI Video Studio.
-Generate an elite YouTube content pack for:
-Topic/Script: "${userTopic}"
+Generate a complete YouTube content pack for:
+Topic: "${userTopic}"
 Video Format: "${videoType || 'YouTube Video'}"
 Target Audience: "${targetAudience || 'Creators & General Audience'}"
-Primary Keyword: "${mainKeyword || 'Auto-extract primary keyword'}"
-Language: "${language || 'English / Nepali'}"
+Primary Keyword: "${mainKeyword || 'Auto-extract'}"
+Language: "${language || 'Nepali / English'}"
 
 CRITICAL REQUIREMENTS:
-1. Provide 5 distinct title variations categorized by psychological angle: High CTR Curiosity, Search SEO Optimized, Emotional Story, How-To/Educational, and Viral Question.
-2. Provide a structured description containing:
-   - 2-sentence hook above the fold (first 150 characters crucial)
-   - Detailed value synopsis
-   - Chapter timestamp outline
-   - Resource links section placeholder
-   - Connect with creator section
-3. 20-30 comma-separated keyword tags.
-4. 5-8 relevant hashtags.
-5. An objective 0-100 SEO score with 3 concrete bullet points for improvement.
+1. Provide 10 distinct title formulas categorized by: Search-Focused, Curiosity-Driven, Emotional, Listicle, High-CTR, Question, Story-Driven, How-To / Guide, Direct & Clean, Trend-Focused.
+2. Provide a full YouTube description with introduction, timestamps outline, and credits.
+3. 15-20 comma-separated tags and 5-8 hashtags.
+4. Thumbnail text hook (2-4 words maximum).
+5. Pinned comment, community post, shorts caption, tiktok caption, facebook caption.
+6. A realistic 7-metric SEO score analysis (0-100) with explanations for: keywordRelevance, searchIntent, titleClarity, descriptionQuality, keywordCoverage, readability, audienceRelevance, and overallAssessment.
 
-Respond ONLY with a valid JSON object matching this schema:
+Respond ONLY with valid JSON:
 {
-  "titles": [
-    "Title option 1",
-    "Title option 2",
-    "Title option 3",
-    "Title option 4",
-    "Title option 5"
+  "youtubeTitle": "Primary recommended title",
+  "alternativeTitles": [
+    "Alternative 1",
+    "Alternative 2",
+    "Alternative 3",
+    "Alternative 4"
   ],
-  "description": "Full structured YouTube description with timestamps and links",
-  "tags": ["tag1", "tag2", "tag3"],
-  "hashtags": ["#tag1", "#tag2"],
-  "seoScore": 92,
-  "seoFeedback": [
-    "Strength 1",
-    "Strength 2",
-    "Actionable tip"
-  ]
+  "titleFormulas": [
+    { "category": "Search-Focused", "title": "Title", "rationale": "Reason" },
+    { "category": "Curiosity-Driven", "title": "Title", "rationale": "Reason" },
+    { "category": "Emotional", "title": "Title", "rationale": "Reason" },
+    { "category": "Listicle", "title": "Title", "rationale": "Reason" },
+    { "category": "High-CTR", "title": "Title", "rationale": "Reason" },
+    { "category": "Question", "title": "Title", "rationale": "Reason" },
+    { "category": "Story-Driven", "title": "Title", "rationale": "Reason" },
+    { "category": "How-To / Guide", "title": "Title", "rationale": "Reason" },
+    { "category": "Direct & Clean", "title": "Title", "rationale": "Reason" },
+    { "category": "Trend-Focused", "title": "Title", "rationale": "Reason" }
+  ],
+  "youtubeDescription": "Full structured description with 0:00 timestamps and credits",
+  "hashtags": ["#tag1", "#tag2", "#tag3", "#tag4", "#tag5"],
+  "youtubeTags": ["tag 1", "tag 2", "tag 3", "tag 4", "tag 5", "tag 6", "tag 7"],
+  "keywords": ["keyword 1", "keyword 2", "keyword 3"],
+  "thumbnailText": "3-WORD BOLD TEXT",
+  "hook": "Opening 5-second spoken hook",
+  "cta": "Call to action text",
+  "disclaimer": "Educational and entertainment disclaimer",
+  "shortsCaption": "Shorts caption with hashtags",
+  "tiktokCaption": "TikTok caption with hashtags",
+  "facebookCaption": "Facebook caption with hashtags",
+  "pinnedComment": "Engaging question to pin as top comment",
+  "communityPost": "Engaging community tab post update",
+  "seoAnalysis": {
+    "score": 92,
+    "keywordRelevance": { "score": 95, "explanation": "Target keyword positioned early in title and description." },
+    "searchIntent": { "score": 90, "explanation": "Directly matches viewer query intent." },
+    "titleClarity": { "score": 92, "explanation": "High clarity on mobile screens under 60 characters." },
+    "descriptionQuality": { "score": 88, "explanation": "Includes chapter timestamps and contextual links." },
+    "keywordCoverage": { "score": 94, "explanation": "Covers primary, secondary, and long-tail variants." },
+    "readability": { "score": 90, "explanation": "Clean paragraph spacing and scannable bullet points." },
+    "audienceRelevance": { "score": 93, "explanation": "Calibrated specifically for target audience interest." },
+    "overallAssessment": "Excellent metadata package ready for publishing."
+  }
 }`;
 
     const text = await generateGeminiContentWithFallback(ai, prompt);
@@ -328,51 +448,234 @@ Respond ONLY with a valid JSON object matching this schema:
   } catch (err: any) {
     console.error('Content assistant error:', err);
     res.status(err.status === 429 ? 429 : 500).json({
-      error: 'Failed to generate content pack.',
-      details: err?.message || 'Gemini API call failed.'
+      success: false,
+      error: err?.message || 'Failed to generate content pack. Please try again.'
     });
   }
 });
 
-// Thumbnail Concept Designer
-apiRouter.post(['/ai/thumbnail-concept', '/api/ai/thumbnail-concept'], async (req, res) => {
+// 5. Creative Writing Tools (10 Live Actions)
+apiRouter.post(['/ai/writing-tool', '/api/ai/writing-tool'], async (req, res) => {
   try {
-    const { idea, title, style, aspectRatio } = req.body;
-    if (!idea || typeof idea !== 'string' || idea.trim() === '') {
-      return res.status(400).json({ error: 'Video concept or title is required.' });
+    const text = (req.body.text || req.body.inputText || req.body.prompt || '').trim();
+    const tool = (req.body.tool || req.body.toolType || 'Rewrite').trim();
+    const language = req.body.language;
+    if (!text) {
+      return res.status(400).json({ success: false, error: 'Input text is required.' });
     }
 
     const ai = getGeminiClient();
     if (!ai) {
       return res.status(503).json({
-        error: 'AI configuration is missing.',
-        details: 'GEMINI_API_KEY is not configured in Vercel project environment variables.'
+        success: false,
+        error: 'Gemini API key is not configured.'
       });
     }
 
-    const prompt = `You are a YouTube thumbnail art director responsible for high-CTR thumbnail compositions.
-Design a thumbnail visual blueprint for:
+    const prompt = `You are an elite creative editor for video scripts and digital content.
+Transform the following text using the action "${tool || 'Rewrite'}".
+Target Language context: ${language || 'Maintain original language (Nepali / English)'}
+
+TOOL DEFINITION:
+- 'Rewrite': Provide a refreshed, highly engaging, dynamic perspective.
+- 'Improve Hook': Rewrite the opening into an irresistible high-retention hook that stops the scroll immediately.
+- 'More Emotional': Infuse heartfelt, touching, emotionally resonant sentiment.
+- 'More Cinematic': Elevate with rich atmospheric visuals, lens cues, and cinematic rhythm.
+- 'More Professional': Formulate an authoritative, executive, well-structured tone.
+- 'Shorten': Remove all fluff, keeping only the highest-impact core message.
+- 'Expand': Add rich contextual depth, descriptive storytelling, and practical detail.
+- 'Translate (Nepali)': Translate naturally into fluent, culturally authentic Nepali (or English if input is Nepali).
+- 'Grammar Fix': Perfect all spelling, punctuation, phrasing, and syntax without losing author voice.
+- 'Better CTA': End with a magnetic, action-driving call to action for YouTube viewers.
+
+INPUT TEXT:
+"${text}"
+
+Respond with ONLY a valid JSON object:
+{
+  "result": "The complete transformed text",
+  "tool": "${tool}"
+}`;
+
+    const rawText = await generateGeminiContentWithFallback(ai, prompt);
+    const parsed = extractJsonFromText(rawText);
+
+    return res.json({
+      success: true,
+      result: parsed.result || text,
+      tool: tool
+    });
+  } catch (err: any) {
+    console.error('Writing tool error:', err);
+    res.status(err.status === 429 ? 429 : 500).json({
+      success: false,
+      error: err?.message || 'Failed to process writing action.'
+    });
+  }
+});
+
+// 6. Creator AI Power Suite (Individual Tool Generators)
+apiRouter.post(['/ai/content-suite', '/api/ai/content-suite'], async (req, res) => {
+  try {
+    const toolType = req.body.toolType || req.body.tool;
+    const topic = (req.body.topic || req.body.prompt || req.body.inputText || req.body.idea || '').trim();
+    const options = req.body.options;
+    if (!topic) {
+      return res.status(400).json({ success: false, error: 'Topic is required.' });
+    }
+
+    const ai = getGeminiClient();
+    if (!ai) {
+      return res.status(503).json({
+        success: false,
+        error: 'Gemini API key is not configured.'
+      });
+    }
+
+    let prompt = '';
+
+    if (toolType === 'ideas') {
+      prompt = `Generate 5 high-impact, clickable YouTube video ideas based on the topic "${topic}".
+Respond ONLY with valid JSON:
+{
+  "ideas": [
+    {
+      "title": "Compelling Title",
+      "hook": "Opening 5-second hook idea",
+      "targetAudience": "Audience segment",
+      "retentionStrategy": "Why viewers will watch until the end"
+    }
+  ]
+}`;
+    } else if (toolType === 'calendar') {
+      prompt = `Generate a realistic 4-week YouTube video production and publishing calendar for the niche/topic: "${topic}".
+Respond ONLY with valid JSON:
+{
+  "calendar": [
+    {
+      "week": 1,
+      "publishDate": "Day 7",
+      "videoType": "Longform YouTube",
+      "title": "Video title",
+      "productionMilestone": "Script by Day 2, Shoot Day 4, Edit Day 6"
+    },
+    {
+      "week": 2,
+      "publishDate": "Day 14",
+      "videoType": "9:16 Shorts Hook",
+      "title": "Short title",
+      "productionMilestone": "Batch record 3 variations"
+    },
+    {
+      "week": 3,
+      "publishDate": "Day 21",
+      "videoType": "Deep Dive Tutorial",
+      "title": "Tutorial title",
+      "productionMilestone": "Screen capture and timestamps"
+    },
+    {
+      "week": 4,
+      "publishDate": "Day 28",
+      "videoType": "Story / Climax",
+      "title": "Story title",
+      "productionMilestone": "Cinematic B-roll and color grade"
+    }
+  ]
+}`;
+    } else if (toolType === 'script') {
+      prompt = `Write a complete, ready-to-record YouTube spoken video script for: "${topic}".
+Respond ONLY with valid JSON:
+{
+  "title": "Suggested Title",
+  "estimatedDuration": "3-5 minutes",
+  "hook": "Opening 0-15s magnetic hook",
+  "introduction": "15-45s context and promise",
+  "bodyPoints": [
+    { "heading": "Point 1", "spokenText": "Dialogue...", "visualCue": "Visual note" },
+    { "heading": "Point 2", "spokenText": "Dialogue...", "visualCue": "Visual note" },
+    { "heading": "Point 3", "spokenText": "Dialogue...", "visualCue": "Visual note" }
+  ],
+  "callToAction": "Final CTA spoken line"
+}`;
+    } else if (toolType === 'prompt') {
+      prompt = `Generate 4 copy-ready cinematic visual prompts for Imagen 3, Midjourney, and Flux based on the video topic: "${topic}".
+Respond ONLY with valid JSON:
+{
+  "prompts": [
+    { "scene": "Establishing Hero Shot", "prompt": "Detailed 8k cinematic prompt with lighting and lens notes" },
+    { "scene": "Emotional Close-Up", "prompt": "Detailed 8k cinematic prompt with lighting and lens notes" },
+    { "scene": "Dynamic Action Movement", "prompt": "Detailed 8k cinematic prompt with lighting and lens notes" },
+    { "scene": "Atmospheric Backdrop", "prompt": "Detailed 8k cinematic prompt with lighting and lens notes" }
+  ]
+}`;
+    } else {
+      // shorts-caption default
+      prompt = `Generate 3 high-converting social media captions with emojis and hashtags for vertical short videos about: "${topic}".
+Respond ONLY with valid JSON:
+{
+  "captions": [
+    { "platform": "YouTube Shorts", "text": "Caption text with hashtags and emojis" },
+    { "platform": "Instagram Reels", "text": "Caption text with hashtags and emojis" },
+    { "platform": "TikTok", "text": "Caption text with hashtags and emojis" }
+  ]
+}`;
+    }
+
+    const rawText = await generateGeminiContentWithFallback(ai, prompt);
+    const parsed = extractJsonFromText(rawText);
+
+    return res.json({
+      success: true,
+      toolType,
+      data: parsed
+    });
+  } catch (err: any) {
+    console.error('Content suite error:', err);
+    res.status(err.status === 429 ? 429 : 500).json({
+      success: false,
+      error: err?.message || 'Failed to generate suite content.'
+    });
+  }
+});
+
+// 7. Thumbnail Concept Blueprint
+apiRouter.post(['/ai/thumbnail-concept', '/api/ai/thumbnail-concept'], async (req, res) => {
+  try {
+    const { idea, title, style, aspectRatio } = req.body;
+    if (!idea || typeof idea !== 'string' || idea.trim() === '') {
+      return res.status(400).json({ success: false, error: 'Video concept or title is required.' });
+    }
+
+    const ai = getGeminiClient();
+    if (!ai) {
+      return res.status(503).json({
+        success: false,
+        error: 'Gemini API key is not configured.'
+      });
+    }
+
+    const prompt = `You are a YouTube thumbnail art director specialized in high click-through rates (CTR).
+Design a thumbnail blueprint for:
 Video Idea: "${idea}"
 Video Title: "${title || 'Creative Video'}"
-Visual Style: "${style || 'Bold & High Contrast'}"
+Visual Style: "${style || 'Viral-style creator thumbnail'}"
 Aspect Ratio: "${aspectRatio || '16:9'}"
 
-Provide:
-1. Headline text: 2 to 4 words maximum in bold contrasting typography.
-2. Layout structure: Rule of Thirds, Left-Right Split, or Center Shock.
-3. Focal point description: Primary expressive subject/face or object.
-4. Color palette: 3 complementary high-contrast colors (e.g., Electric Yellow, Midnight Blue, Crisp White).
-5. Background scene description.
-6. A copy-ready AI Image generation prompt for Midjourney / Imagen 3 / DALL-E.
-
-Respond ONLY with a valid JSON object matching this schema:
+Respond ONLY with valid JSON:
 {
-  "headlineText": "3-WORD BOLD HOOK",
-  "layoutStructure": "Rule of Thirds: Subject on right, bold typography anchored left",
-  "focalPoint": "Expressive creator face with shocked expression looking towards glowing object",
-  "colorPalette": ["#FFD700", "#1E3A8A", "#FFFFFF"],
-  "backgroundScene": "Dark cinematic atmospheric backdrop with subtle neon rim lighting",
-  "imagePrompt": "Cinematic 8k close-up photograph of an expressive creator looking at glowing device, volumetric rim lighting, vibrant high contrast colors, photorealistic, 16:9 ratio"
+  "concept": "High-concept thumbnail summary",
+  "layoutDescription": "Rule of thirds composition description",
+  "subjectPlacement": "Where the focal face or subject is positioned",
+  "background": "Background lighting, depth of field, and atmosphere",
+  "lighting": "Key, fill, and rim light direction",
+  "mainHeadline": "2-4 BOLD CONTRAST WORDS",
+  "subHeadline": "OFFICIAL 4K",
+  "badgeText": "MUST WATCH",
+  "colorPalette": ["#FBBF24", "#6366F1", "#06B6D4", "#111827"],
+  "imagePrompt": "Photorealistic 8k prompt for Imagen 3, Midjourney, or Flux with cinematic lighting, depth of field, and compositional framing",
+  "negativePrompt": "blurry, low quality, distorted anatomy, text artifacts, cartoonish, oversaturated skin, flat lighting",
+  "recommendedAspect": "${aspectRatio || '16:9'}",
+  "style": "${style || 'Viral-style creator thumbnail'}"
 }`;
 
     const text = await generateGeminiContentWithFallback(ai, prompt);
@@ -382,25 +685,152 @@ Respond ONLY with a valid JSON object matching this schema:
   } catch (err: any) {
     console.error('Thumbnail concept error:', err);
     res.status(err.status === 429 ? 429 : 500).json({
-      error: 'Failed to generate thumbnail concept.',
-      details: err?.message || 'Gemini API call failed.'
+      success: false,
+      error: err?.message || 'Failed to generate thumbnail blueprint.'
     });
   }
 });
 
-// AI Website Guide Endpoint
+// 8. Thumbnail Reference Image Vision Analysis (Gemini Multimodal Vision)
+apiRouter.post(['/ai/analyze-thumbnail-image', '/api/ai/analyze-thumbnail-image'], async (req, res) => {
+  try {
+    const { imageBase64, mimeType, topic } = req.body;
+    if (!imageBase64 || typeof imageBase64 !== 'string') {
+      return res.status(400).json({ success: false, error: 'Base64 image data is required.' });
+    }
+
+    const ai = getGeminiClient();
+    if (!ai) {
+      return res.status(503).json({
+        success: false,
+        error: 'Gemini API key is not configured.'
+      });
+    }
+
+    // Strip data URL prefix if present
+    const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
+
+    const contents = [
+      {
+        role: 'user',
+        parts: [
+          {
+            inlineData: {
+              mimeType: mimeType || 'image/jpeg',
+              data: cleanBase64
+            }
+          },
+          {
+            text: `You are an expert YouTube thumbnail art director.
+Analyze this uploaded reference image for its suitability as a high-CTR YouTube thumbnail (Topic: "${topic || 'General video'}").
+Evaluate:
+1. Subject framing, gaze, and facial expression clarity on small mobile screens.
+2. Lighting contrast, background separation, and color vibrancy.
+3. Negative space for bold headline overlay text.
+4. Clickability score from 0 to 100 with objective criteria.
+5. 3 specific actionable adjustments to boost CTR.
+
+Respond ONLY with valid JSON:
+{
+  "subjectAnalysis": "Detailed observation of subject and emotional hook",
+  "lightingAndContrast": "Evaluation of shadows, rim light, and background separation",
+  "compositionFeedback": "Rule of thirds and typography space assessment",
+  "clickabilityScore": 84,
+  "recommendedAdjustments": [
+    "Adjustment 1",
+    "Adjustment 2",
+    "Adjustment 3"
+  ]
+}`
+          }
+        ]
+      }
+    ];
+
+    const rawText = await generateGeminiContentWithFallback(ai, contents);
+    const parsed = extractJsonFromText(rawText);
+
+    return res.json({
+      success: true,
+      ...parsed
+    });
+  } catch (err: any) {
+    console.error('Thumbnail vision analysis error:', err);
+    res.status(err.status === 429 ? 429 : 500).json({
+      success: false,
+      error: err?.message || 'Failed to analyze reference image with AI Vision.'
+    });
+  }
+});
+
+// 9. AI Thumbnail Image Generation (Imagen / Gemini Flash Image)
+apiRouter.post(['/ai/generate-thumbnail-image', '/api/ai/generate-thumbnail-image'], async (req, res) => {
+  try {
+    const { prompt, aspectRatio } = req.body;
+    if (!prompt || typeof prompt !== 'string' || prompt.trim() === '') {
+      return res.status(400).json({ success: false, error: 'Image prompt is required.' });
+    }
+
+    const ai = getGeminiClient();
+    if (!ai) {
+      return res.status(503).json({
+        success: false,
+        error: 'Gemini API key is not configured.'
+      });
+    }
+
+    try {
+      // Attempt image generation via imagen-3.0-generate-002
+      const imgRes = await ai.models.generateImages({
+        model: 'imagen-3.0-generate-002',
+        prompt: `${prompt}, high contrast, 8k resolution, photorealistic cinematic lighting, YouTube thumbnail composition`,
+        config: {
+          numberOfImages: 1,
+          aspectRatio: aspectRatio === '9:16' ? '9:16' : aspectRatio === '1:1' ? '1:1' : '16:9'
+        }
+      });
+
+      if (imgRes && imgRes.generatedImages && imgRes.generatedImages.length > 0) {
+        const img = imgRes.generatedImages[0];
+        const base64 = img.image?.imageBytes;
+        if (base64) {
+          return res.json({
+            success: true,
+            imageBase64: `data:image/jpeg;base64,${base64}`,
+            mimeType: 'image/jpeg'
+          });
+        }
+      }
+    } catch (imgErr: any) {
+      console.warn('Imagen 3 direct generation not enabled on this key tier:', imgErr?.message || imgErr);
+    }
+
+    // Honest, transparent response per Requirement 6 & 9
+    return res.status(422).json({
+      success: false,
+      error: 'Direct AI Image Generation requires an image-generation enabled Gemini API key tier. You can use the copy-ready High-CTR prompt generated above directly in Imagen 3, Midjourney, or Flux, or upload your custom background photo onto the interactive canvas.'
+    });
+  } catch (err: any) {
+    console.error('Image generation endpoint error:', err);
+    res.status(500).json({
+      success: false,
+      error: err?.message || 'Image generation service error.'
+    });
+  }
+});
+
+// 10. AI Website Guide (Multilingual + Vision Support)
 apiRouter.post(['/ai/guide', '/api/ai/guide'], async (req, res) => {
   try {
-    const { message, history } = req.body;
+    const { message, history, imageBase64, mimeType } = req.body;
     const userMessage = (message || '').trim();
 
-    if (!userMessage) {
-      return res.status(400).json({ error: 'Message cannot be empty.' });
+    if (!userMessage && !imageBase64) {
+      return res.status(400).json({ success: false, error: 'Message or image cannot be empty.' });
     }
 
     const ai = getGeminiClient();
 
-    // Whitelist of valid tool IDs currently live on Kiran AI Video Studio
     const VALID_TOOL_METADATA: Record<string, { name: string; route: string; purpose: string }> = {
       'video-generator': {
         name: 'AI Video Planner',
@@ -415,7 +845,7 @@ apiRouter.post(['/ai/guide', '/api/ai/guide'], async (req, res) => {
       'content-assistant': {
         name: 'Content & SEO Assistant',
         route: 'content-assistant',
-        purpose: 'YouTube SEO and metadata optimizer. Generates 5 high-CTR titles, structured descriptions with chapters/timestamps, tags, hashtags, and objective 0-100 SEO scoring.'
+        purpose: 'YouTube SEO and metadata suite: 10 title formulas, description with timestamps, tags, hashtags, hook, pinned comment, community post, and 10 instant creative writing tools.'
       },
       'thumbnail-maker': {
         name: 'Thumbnail Concept Designer',
@@ -466,8 +896,8 @@ Your purpose: Understand what the visitor needs and explain which Kiran AI Video
 CURRENT AVAILABLE TOOLS ON KIRAN AI VIDEO STUDIO:
 1. "video-generator" (AI Video Planner): Multi-scene screenplay, scriptwriting, camera movements, dialogue, voiceover, sound cues, visual prompts for full videos.
 2. "shorts-creator" (Shorts & Reels Creator): 9:16 vertical video storyboarder, 3-second hook scripts, fast visual pacing, on-screen text, captions for YouTube Shorts/TikTok/Reels.
-3. "content-assistant" (Content & SEO Assistant): YouTube SEO, 5 title variations, full structured description with chapters/timestamps, keyword tags, hashtags, 0-100 objective SEO score.
-4. "thumbnail-maker" (Thumbnail Concept Designer): High-CTR thumbnail composition, visual layout rules (Rule of Thirds, Split Screen), bold headline typography, color palettes, and AI image generator prompts.
+3. "content-assistant" (Content & SEO Assistant): YouTube SEO, 10 title formulas, description with timestamps, tags, hashtags, pinned comment, community post, 10 creative writing tools, and 7-metric SEO score.
+4. "thumbnail-maker" (Thumbnail Concept Designer): High-CTR thumbnail composition, visual layout rules (Rule of Thirds), bold headline typography, color palettes, and AI image generator prompts.
 5. "video-editor" (Timeline Video Editor): In-browser multi-track timeline video editor to arrange video, audio, and subtitle layers, trim clips, and preview playback.
 6. "music-video" (Music Video Storyboarder): Narrative storyboarder specialized for songs (Nepali folk, acoustic, modern pop, romantic) with verse-by-verse scene breakdowns and character emotion arcs.
 7. "templates" (Templates Library): Pre-built video & short templates ready to load into the planner.
@@ -477,7 +907,7 @@ CURRENT AVAILABLE TOOLS ON KIRAN AI VIDEO STUDIO:
 
 CRITICAL RULES:
 1. LANGUAGE SUPPORT:
-- Support ALL languages (Nepali, Romanized Nepali, Hindi, English, etc.).
+- Support ALL languages (Nepali, Romanized Nepali, Hindi, English, Spanish, etc.).
 - Automatically detect the language and dialect the user is using.
 - ALWAYS respond in the EXACT same language and style!
 - If the visitor writes in Romanized Nepali (e.g. "mero geet ko title ra description chahiyo", "Shorts kasari banaune?"), reply naturally in Romanized Nepali / Nepali style!
@@ -495,10 +925,10 @@ CRITICAL RULES:
 - If the user asks something unrelated to video creation, answer briefly and explain what video creative tools are available.
 
 3. NO FALSE CLAIMS:
-- NEVER make claims like: guaranteed viral, guaranteed views, guaranteed subscribers, or 100% accurate.
+- NEVER claim guaranteed viral views or guaranteed subscribers.
 
 OUTPUT FORMAT:
-Respond with ONLY valid JSON (no markdown ticks):
+Respond ONLY with valid JSON:
 {
   "userGoal": "Concise summary of user's goal",
   "detectedLanguage": "Detected language/dialect name",
@@ -512,14 +942,31 @@ Respond with ONLY valid JSON (no markdown ticks):
   ]
 }`;
 
-        const prompt = `${systemPrompt}
+        let promptOrContents: any;
+        if (imageBase64) {
+          const cleanBase64 = imageBase64.replace(/^data:[^;]+;base64,/, '');
+          promptOrContents = [
+            {
+              role: 'user',
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: mimeType || 'image/jpeg',
+                    data: cleanBase64
+                  }
+                },
+                {
+                  text: `${systemPrompt}\n\n${formattedHistory ? `CONVERSATION HISTORY:\n${formattedHistory}\n\n` : ''}VISITOR ATTACHED AN IMAGE AND SAID:\n"${userMessage || 'Please examine this image and guide me.'}"`
+                }
+              ]
+            }
+          ];
+        } else {
+          promptOrContents = `${systemPrompt}\n\n${formattedHistory ? `CONVERSATION HISTORY:\n${formattedHistory}\n\n` : ''}LATEST VISITOR MESSAGE:\n"${userMessage}"`;
+        }
 
-${formattedHistory ? `PREVIOUS CONVERSATION:\n${formattedHistory}\n\n` : ''}LATEST VISITOR MESSAGE:
-"${userMessage}"`;
-
-        const rawText = await generateGeminiContentWithFallback(ai, prompt);
-        const cleaned = rawText.replace(/```json/gi, '').replace(/```/gi, '').trim();
-        const parsed = JSON.parse(cleaned);
+        const rawText = await generateGeminiContentWithFallback(ai, promptOrContents);
+        const parsed = extractJsonFromText(rawText);
 
         const sanitizedTools = Array.isArray(parsed.recommendedTools)
           ? parsed.recommendedTools
@@ -538,29 +985,22 @@ ${formattedHistory ? `PREVIOUS CONVERSATION:\n${formattedHistory}\n\n` : ''}LATE
           recommendedTools: sanitizedTools
         });
       } catch (err: any) {
-        console.warn('Gemini AI Guide using semantic fallback:', err?.message || String(err));
+        console.warn('Gemini Guide using semantic fallback:', err?.message || String(err));
       }
     }
 
-    // High quality intelligent offline / fallback analyzer
+    // Semantic Offline / Fallback Guide Logic
     const lower = userMessage.toLowerCase();
-
-    // Language detection heuristics
     const isRomanizedNepali = /\b(mero|chahiyo|kasari|geet|banaune|suno|namaste|hunchha|huncha|pani|lai|cha|ko|ma|garnu|banauna|thaha|kasto)\b/i.test(lower);
     const isDevanagariNepali = /[\u0900-\u097F]/.test(userMessage);
-    const isHindi = /\b(kaise|kare|mujhe|chahiye|karna|hai|mera|meri|gaana|bana|sakte|kripya)\b/i.test(lower) || /[\u0900-\u097F]/.test(userMessage) && /(चाहिए|कैसे|करें|बनाना|थंबनेल)/.test(userMessage);
+    const isHindi = /\b(kaise|kare|mujhe|chahiye|karna|hai|mera|meri|gaana|bana|sakte|kripya)\b/i.test(lower);
 
-    // Intent checks
     const wantsMusicOrSong = /(song|music|geet|gaana|lyrics|melody|singer|गीत|गाना|संगीत)/i.test(lower);
     const wantsSEOOrTitle = /(title|description|seo|tag|tags|hashtag|hashtags|keywords|शीर्षक|विवरण|ट्याग)/i.test(lower);
     const wantsThumbnail = /(thumbnail|cover|poster|photo|image|banner|थम्बनेल|थंबनेल|तस्बिर|फोटो)/i.test(lower);
     const wantsShorts = /(short|shorts|reel|reels|tiktok|vertical|9:16|hook|कथा)/i.test(lower);
     const wantsEditor = /(edit|editor|timeline|trim|cut|audio track|volume|layers|एडिटर|सम्पादन)/i.test(lower);
     const wantsVideoPlan = /(video|script|screenplay|youtube|tourism|documentary|vlog|travel|nepal|camera|भिडियो|योजना)/i.test(lower);
-    const wantsAbout = /(about|who made|kiran|chaulagain|creator|developer|किरण)/i.test(lower);
-    const wantsContact = /(contact|email|support|feedback|bug|help|सम्पर्क)/i.test(lower);
-
-    // Check for clearly unsupported features
     const wantsDirectRender = /(render.*mp4|mp4.*render|download.*mp4|make.*mp4|generate.*mp4|export.*mp4|direct.*mp4|mp4|upload to youtube|direct upload|voice clone|deepfake)/i.test(lower);
     const isUnrelated = /\b(python|javascript|bitcoin|crypto|math|physics|biology|weather|recipe|cooking|president)\b/i.test(lower);
 
@@ -569,30 +1009,19 @@ ${formattedHistory ? `PREVIOUS CONVERSATION:\n${formattedHistory}\n\n` : ''}LATE
         return res.json({
           userGoal: 'सिधै क्लाउड MP4 भिडियो रेन्डर गर्ने सुविधा',
           detectedLanguage: 'Nepali (नेपाली)',
-          message: 'Currently, Kiran AI Video Studio does not have a tool for direct cloud MP4 rendering. किरण एआई भिडियो स्टुडियोले मल्टि-सिन पटकथा (screenplay) योजना, क्यामेरा एंगल्स, र इन-ब्राउजर टाइमलाइन भिडियो एडिटर प्रदान गर्दछ, तर सिधै MP4 फाइल रेन्डर गर्ने सुविधा उपलब्ध छैन। तपाईं आफ्नो भिडियो दृश्य योजना तयार गरेर टाइमलाइन एडिटरमा ट्र्याकहरू मिलाउन सक्नुहुन्छ।',
+          message: 'Currently, Kiran AI Video Studio does not have a tool for direct cloud MP4 rendering. किरण एआई भिडियो स्टुडियोले मल्टि-सिन पटकथा (screenplay) योजना, क्यामेरा एंगल्स, र इन-ब्राउजर टाइमलाइन भिडियो एडिटर प्रदान गर्दछ, तर सिधै सर्भरमा MP4 फाइल रेन्डर गर्ने सुविधा छैन। तपाईं आफ्नो भिडियो दृश्य योजना तयार गरेर टाइमलाइन एडिटरमा ट्र्याकहरू मिलाउन सक्नुहुन्छ।',
           recommendedTools: [
             { id: 'video-generator', name: 'AI Video Planner', reason: 'सम्पूर्ण भिडियोको सिन र दृश्य योजना तयार गर्न' },
             { id: 'video-editor', name: 'Timeline Video Editor', reason: 'ब्राउजर टाइमलाइनमा भिडियो र अडियो ट्र्याक मिलाउन' }
           ]
         });
       }
-      if (isRomanizedNepali) {
-        return res.json({
-          userGoal: 'Automated direct MP4 video rendering',
-          detectedLanguage: 'Romanized Nepali',
-          message: 'Currently, Kiran AI Video Studio does not have a tool for that. Kiran AI Video Studio le scene-by-scene screenplay planning, camera directions, ra browser timeline editor pradan garcha, tara automatic cloud MP4 video rendering uplabdha chaina. Tapai aafno project ko scene plan tayar gari timeline editor ma review garna saknu huncha.',
-          recommendedTools: [
-            { id: 'video-generator', name: 'AI Video Planner', reason: 'Video screenplay ra scene breakdown plan garna' },
-            { id: 'video-editor', name: 'Timeline Video Editor', reason: 'Browser timeline ma clips ra audio review garna' }
-          ]
-        });
-      }
       return res.json({
         userGoal: 'Automated direct MP4 video rendering',
-        detectedLanguage: 'English',
-        message: 'Currently, Kiran AI Video Studio does not have a tool for direct cloud MP4 video rendering. Kiran AI Video Studio is specialized for multi-scene screenplay planning, 9:16 vertical shorts pacing, high-CTR thumbnail composition, and YouTube SEO optimization. You can plan your full video scenes with exact camera angles and assemble tracks in our browser Timeline Video Editor.',
+        detectedLanguage: isRomanizedNepali ? 'Romanized Nepali' : 'English',
+        message: 'Currently, Kiran AI Video Studio does not have a tool for direct cloud MP4 video rendering. Kiran AI Video Studio specializes in multi-scene screenplay scriptwriting, 9:16 vertical shorts retention pacing, high-CTR thumbnail composition, and YouTube SEO optimization.',
         recommendedTools: [
-          { id: 'video-generator', name: 'AI Video Planner', reason: 'Structure your complete multi-scene screenplay and visual prompts' },
+          { id: 'video-generator', name: 'AI Video Planner', reason: 'Structure your complete multi-scene screenplay' },
           { id: 'video-editor', name: 'Timeline Video Editor', reason: 'Inspect and trim media tracks on an in-browser timeline' }
         ]
       });
@@ -602,33 +1031,16 @@ ${formattedHistory ? `PREVIOUS CONVERSATION:\n${formattedHistory}\n\n` : ''}LATE
       return res.json({
         userGoal: 'General non-video inquiry',
         detectedLanguage: isDevanagariNepali ? 'Nepali (नेपाली)' : isRomanizedNepali ? 'Romanized Nepali' : 'English',
-        message: isDevanagariNepali
-          ? 'Currently, Kiran AI Video Studio does not have a tool for that. किरण एआई भिडियो स्टुडियो भिडियो निर्माता, युट्युबर, र संगीतकारहरूका लागि भिडियो पटकथा, युट्युब SEO, थम्बनेल, र सर्ट्स योजना गर्न बनाइएको प्लेटफर्म हो।'
-          : isRomanizedNepali
-          ? 'Currently, Kiran AI Video Studio does not have a tool for that. Kiran AI Video Studio video creators, YouTubers, ra musicians haru ko lagi video scripts, YouTube SEO, thumbnails, ra shorts planning garna banaiyeko creative workspace ho.'
-          : 'Currently, Kiran AI Video Studio does not have a tool for that inquiry. Kiran AI Video Studio is focused specifically on video creation: screenplay script planning, YouTube Shorts pacing, high-CTR thumbnail concepts, and YouTube SEO optimization.',
+        message: 'Currently, Kiran AI Video Studio does not have a tool for that inquiry. Kiran AI Video Studio is focused specifically on video creation: screenplay script planning, YouTube Shorts pacing, high-CTR thumbnail concepts, and YouTube SEO metadata optimization.',
         recommendedTools: []
       });
     }
 
-    // Devanagari Nepali Thumbnail
-    if (isDevanagariNepali && wantsThumbnail) {
-      return res.json({
-        userGoal: 'थम्बनेल डिजाइन र कन्सेप्ट योजना',
-        detectedLanguage: 'Nepali (नेपाली)',
-        message: 'तपाईंको युट्युब भिडियोको लागि थम्बनेल योजना गर्न किरण एआई भिडियो स्टुडियोको **Thumbnail Concept Designer** टुल उपलब्ध छ। यसले Rule of Thirds भिजुअल लेआउट, रङ्ग कन्ट्रास्ट, बोल्ड शीर्षक अक्षरहरू (typography), र एआई इमेज प्रम्प्टहरू प्रदान गर्दछ।',
-        recommendedTools: [
-          { id: 'thumbnail-maker', name: 'Thumbnail Concept Designer', reason: 'उच्च CTR भएको थम्बनेल लेआउट र प्रम्प्ट योजना गर्न' }
-        ]
-      });
-    }
-
-    // Romanized Nepali Song/SEO
     if (isRomanizedNepali && wantsMusicOrSong) {
       return res.json({
         userGoal: 'Song title, description, and visual storyboard planning',
         detectedLanguage: 'Romanized Nepali',
-        message: 'Tapai ko song ko lagi title ra description tayar garna Kiran AI Video Studio ko **Content & SEO Assistant** tool le madat garcha. Yo tool le 5 ota high-CTR YouTube titles, timestamps sahitko description, tags, ra hashtags banai dincha.\n\nSaathai, yadi tapai lai aafno geet ko visual storyline, verse-by-verse scene pacing, ra character emotions plan garna man cha bhane **Music Video Storyboarder** tool pani ekdam upayogee huncha!',
+        message: 'Tapai ko song ko lagi title ra description tayar garna Kiran AI Video Studio ko **Content & SEO Assistant** tool le madat garcha. Yo tool le 10 ota high-CTR YouTube titles, timestamps sahitko description, tags, ra hashtags banai dincha.\n\nSaathai, yadi tapai lai aafno geet ko visual storyline, verse-by-verse scene pacing, ra character emotions plan garna man cha bhane **Music Video Storyboarder** tool pani ekdam upayogee huncha!',
         recommendedTools: [
           { id: 'content-assistant', name: 'Content & SEO Assistant', reason: 'Song ko lagi YouTube SEO titles, description, ra tags banauna' },
           { id: 'music-video', name: 'Music Video Storyboarder', reason: 'Geet ko verse ra chorus visual storyline plan garna' }
@@ -636,12 +1048,11 @@ ${formattedHistory ? `PREVIOUS CONVERSATION:\n${formattedHistory}\n\n` : ''}LATE
       });
     }
 
-    // Devanagari Nepali Song/SEO
     if (isDevanagariNepali && wantsMusicOrSong) {
       return res.json({
         userGoal: 'गीतको शीर्षक, विवरण र भिडियो योजना',
         detectedLanguage: 'Nepali (नेपाली)',
-        message: 'तपाईंको नयाँ गीतको लागि युट्युब शीर्षक र विवरण तयार गर्न **Content & SEO Assistant** टुल उपलब्ध छ। यसले ५ वटा आकर्षक शीर्षकहरू, टाइमस्ट्याम्प सहितको विवरण, र ट्यागहरू बनाउँछ।\n\nसाथै, गीतको कथा र दृश्यहरू (storyboard) योजना गर्न **Music Video Storyboarder** टुल प्रयोग गर्न सक्नुहुन्छ!',
+        message: 'तपाईंको नयाँ गीतको लागि युट्युब शीर्षक र विवरण तयार गर्न **Content & SEO Assistant** टुल उपलब्ध छ। यसले १० वटा आकर्षक शीर्षकहरू, टाइमस्ट्याम्प सहितको विवरण, र ट्यागहरू बनाउँछ।\n\nसाथै, गीतको कथा र दृश्यहरू (storyboard) योजना गर्न **Music Video Storyboarder** टुल प्रयोग गर्न सक्नुहुन्छ!',
         recommendedTools: [
           { id: 'content-assistant', name: 'Content & SEO Assistant', reason: 'गीतको लागि युट्युब शीर्षक र विवरण तयार गर्न' },
           { id: 'music-video', name: 'Music Video Storyboarder', reason: 'गीतको दृश्य कथा र क्यारेक्टर भावना योजना गर्न' }
@@ -649,29 +1060,21 @@ ${formattedHistory ? `PREVIOUS CONVERSATION:\n${formattedHistory}\n\n` : ''}LATE
       });
     }
 
-    // Thumbnail specific request
     if (wantsThumbnail) {
-      if (isRomanizedNepali) {
-        return res.json({
-          userGoal: 'Thumbnail concept & visual design idea',
-          detectedLanguage: 'Romanized Nepali',
-          message: 'Tapai ko video ko lagi thumbnail concept banauna **Thumbnail Concept Designer** tool uplabdha cha. Yasle Rule of Thirds layout, visual contrast, bold headline typography ideas, ra AI image generator prompt pradan garcha.',
-          recommendedTools: [
-            { id: 'thumbnail-maker', name: 'Thumbnail Concept Designer', reason: 'High-CTR YouTube thumbnail ideas ra AI visual prompt prapta garna' }
-          ]
-        });
-      }
       return res.json({
         userGoal: 'High-CTR thumbnail concept & composition',
-        detectedLanguage: 'English',
-        message: 'To get compelling thumbnail ideas, you can use our **Thumbnail Concept Designer**. It provides proven Rule of Thirds layout architecture, focal subject guidelines, high-contrast bold typography suggestions, color palettes, and copy-ready AI image prompts.',
+        detectedLanguage: isRomanizedNepali ? 'Romanized Nepali' : isDevanagariNepali ? 'Nepali (नेपाली)' : 'English',
+        message: isRomanizedNepali 
+          ? 'Tapai ko video ko lagi thumbnail concept banauna **Thumbnail Concept Designer** tool uplabdha cha. Yasle Rule of Thirds layout, visual contrast, bold headline typography ideas, ra AI image generator prompt pradan garcha.'
+          : isDevanagariNepali
+          ? 'तपाईंको युट्युब भिडियोको लागि थम्बनेल योजना गर्न **Thumbnail Concept Designer** टुल उपलब्ध छ। यसले Rule of Thirds भिजुअल लेआउट, रङ्ग कन्ट्रास्ट, बोल्ड शीर्षक अक्षरहरू, र एआई इमेज प्रम्प्टहरू प्रदान गर्दछ।'
+          : 'To design compelling thumbnails, use our **Thumbnail Concept Designer**. It provides proven Rule of Thirds composition architecture, focal subject positioning, high-contrast bold typography suggestions, and copy-ready AI image prompts.',
         recommendedTools: [
           { id: 'thumbnail-maker', name: 'Thumbnail Concept Designer', reason: 'Create visual composition guidelines and headline concepts' }
         ]
       });
     }
 
-    // Shorts / Reels specific
     if (wantsShorts) {
       return res.json({
         userGoal: 'Vertical 9:16 short video creation',
@@ -685,24 +1088,11 @@ ${formattedHistory ? `PREVIOUS CONVERSATION:\n${formattedHistory}\n\n` : ''}LATE
       });
     }
 
-    // Video plan workflow
     if (wantsVideoPlan) {
-      if (isRomanizedNepali) {
-        return res.json({
-          userGoal: 'YouTube video production workflow',
-          detectedLanguage: 'Romanized Nepali',
-          message: 'YouTube video plan garna tapai 3 ota tools step-by-step prayog garna saknu huncha:\n\n1. **AI Video Planner**: Scene-by-scene script, camera movements, ra voiceover plan garna.\n2. **Thumbnail Concept Designer**: High-contrast thumbnail visual ideas ra layout tayar garna.\n3. **Content & SEO Assistant**: 5 ota catchy titles, timestamps sahitko description, ra tags generate garna.',
-          recommendedTools: [
-            { id: 'video-generator', name: 'AI Video Planner', reason: 'Full video screenplay ra camera shots plan garna' },
-            { id: 'thumbnail-maker', name: 'Thumbnail Concept Designer', reason: 'Clickable thumbnail composition banauna' },
-            { id: 'content-assistant', name: 'Content & SEO Assistant', reason: 'YouTube SEO titles, description, ra tags prapta garna' }
-          ]
-        });
-      }
       return res.json({
         userGoal: 'Comprehensive YouTube video creation workflow',
-        detectedLanguage: 'English',
-        message: 'To produce a successful YouTube video, you can follow this simple 3-step workflow on Kiran AI Video Studio:\n\n1. **AI Video Planner**: Structure your multi-scene screenplay with camera movements, dialogue, voiceover, and scenic pacing.\n2. **Thumbnail Concept Designer**: Design high-contrast thumbnail compositions with focal subject positioning and bold typography.\n3. **Content & SEO Assistant**: Generate 5 optimized titles, structured chapters/timestamps description, and high-relevance tags.',
+        detectedLanguage: isRomanizedNepali ? 'Romanized Nepali' : 'English',
+        message: 'To produce a successful video, follow this workflow on Kiran AI Video Studio:\n\n1. **AI Video Planner**: Structure your multi-scene screenplay with camera movements, dialogue, voiceover, and scenic pacing.\n2. **Thumbnail Concept Designer**: Design high-contrast thumbnail compositions with focal subject positioning and bold typography.\n3. **Content & SEO Assistant**: Generate 10 tested titles, structured chapters/timestamps description, and high-relevance tags.',
         recommendedTools: [
           { id: 'video-generator', name: 'AI Video Planner', reason: 'Generate multi-scene script with camera shots and voiceover' },
           { id: 'thumbnail-maker', name: 'Thumbnail Concept Designer', reason: 'Design high-CTR thumbnail layouts and image prompts' },
@@ -711,7 +1101,6 @@ ${formattedHistory ? `PREVIOUS CONVERSATION:\n${formattedHistory}\n\n` : ''}LATE
       });
     }
 
-    // Default welcoming guide response
     return res.json({
       userGoal: 'Creative video guidance',
       detectedLanguage: isRomanizedNepali ? 'Romanized Nepali' : isDevanagariNepali ? 'Nepali (नेपाली)' : isHindi ? 'Hindi' : 'English',
@@ -730,17 +1119,17 @@ ${formattedHistory ? `PREVIOUS CONVERSATION:\n${formattedHistory}\n\n` : ''}LATE
     });
   } catch (err: any) {
     console.error('AI Guide error:', err);
-    res.status(500).json({ error: 'AI Guide processing failed. Please try again.' });
+    res.status(500).json({ success: false, error: 'AI Guide processing failed. Please try again.' });
   }
 });
 
-// Video Generation Job Endpoints
+// 11. Video Generation Background Jobs
 apiRouter.post(['/video/jobs', '/api/video/jobs'], async (req, res) => {
   try {
     const job = await VideoGenerationService.startJob(req.body);
     res.json(job);
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ success: false, error: err.message });
   }
 });
 
@@ -749,7 +1138,7 @@ apiRouter.get(['/video/jobs/:id', '/api/video/jobs/:id'], async (req, res) => {
     const job = await VideoGenerationService.getJobStatus(req.params.id);
     res.json(job);
   } catch (err: any) {
-    res.status(404).json({ error: err.message });
+    res.status(404).json({ success: false, error: err.message });
   }
 });
 
@@ -757,20 +1146,25 @@ apiRouter.get(['/video/jobs/:id', '/api/video/jobs/:id'], async (req, res) => {
 app.use('/api', apiRouter);
 app.use('/', apiRouter);
 
-// Explicit 404 Handler for unrecognized /api endpoints
+// Explicit 404 Handler for unrecognized API routes
 app.use('/api', (req, res) => {
-  res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.originalUrl || req.url}` });
+  res.status(404).json({
+    success: false,
+    error: `API endpoint not found: ${req.method} ${req.originalUrl || req.url}`
+  });
 });
 
-// Global Express error handler
+// Controlled Global Error Handler
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('Unhandled server error:', err);
+  console.error('Controlled server error:', err?.message || err);
   if (res.headersSent) {
     return next(err);
   }
-  res.status(err.status || 500).json({
-    error: err?.message || 'An internal server error occurred. Please try again.',
-    status: err.status || 500
+  const status = err.status || 500;
+  res.status(status).json({
+    success: false,
+    error: err?.message || 'An internal error occurred. Please try again.',
+    status
   });
 });
 

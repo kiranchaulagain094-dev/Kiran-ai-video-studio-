@@ -46,6 +46,7 @@ export interface VideoScene {
   cameraMovement: string;
   voiceoverText?: string;
   soundEffects?: string;
+  audioNotes?: string;
   musicMood?: string;
   previewColor?: string;
 }
@@ -105,6 +106,11 @@ export interface SEOAnalysisResult {
 export interface AIContentPack {
   youtubeTitle: string;
   alternativeTitles: string[];
+  titleFormulas?: {
+    category: string;
+    title: string;
+    rationale: string;
+  }[];
   youtubeDescription: string;
   hashtags: string[];
   youtubeTags: string[];
@@ -197,5 +203,6 @@ export interface AIGuideChatMessage {
   userGoal?: string;
   recommendedTools?: RecommendedTool[];
   detectedLanguage?: string;
+  imageUrl?: string;
 }
 

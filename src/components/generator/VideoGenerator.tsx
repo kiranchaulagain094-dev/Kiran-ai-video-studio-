@@ -137,14 +137,14 @@ export const VideoGenerator: React.FC<VideoGeneratorProps> = ({
         sceneNumber: s.sceneNumber || idx + 1,
         timeRange: s.timeRange || `0:${idx * 30} - 0:${(idx + 1) * 30}`,
         title: s.title || `Scene ${idx + 1}`,
-        visualDescription: s.description,
-        cameraDirection: s.cameraMovement || 'Slow cinematic dolly shot at eye level',
-        characterFocus: idx === 0 ? 'Lead Protagonist walking alone' : 'Two protagonists sharing shelter',
+        visualDescription: s.description || s.visualPrompt || '',
+        cameraDirection: s.cameraMovement || 'Cinematic tracking camera shot',
+        characterFocus: s.description ? s.description.slice(0, 60) : `Protagonist scene ${idx + 1}`,
         voiceover: s.voiceoverText || '',
-        dialogue: idx % 2 === 1 ? '"कहिलेकाहीँ चिसो झरीले पनि मुटुलाई न्यानो बनाउँछ..."' : '',
-        onScreenText: idx === 0 ? projectName.toUpperCase().slice(0, 18) : 'KATHMANDU 2026',
-        sfxCues: 'Patan rain on copper roof, distant temple bell chime, soft violin swell',
-        visualPrompt: s.visualPrompt
+        dialogue: s.voiceoverText || '',
+        onScreenText: s.title || `SCENE ${idx + 1}`,
+        sfxCues: s.audioNotes || 'Atmospheric ambient sound and orchestral music swell',
+        visualPrompt: s.visualPrompt || s.description || ''
       }));
 
       const newProject: Project = {
@@ -173,23 +173,24 @@ export const VideoGenerator: React.FC<VideoGeneratorProps> = ({
           cameraMovement: sm.cameraDirection,
           voiceoverText: sm.voiceover
         })),
-        script: res.fullScript || `[Hook]\n${res.summary}\n\n[Script]\n${ideaPrompt}`
+        script: res.fullScript || `[Summary]\n${res.summary}\n\n[Idea]\n${ideaPrompt}`
       };
 
       StudioApiService.saveProject(newProject);
       onProjectCreated(newProject);
 
       setGeneratedPlan({
-        hook: `Have you ever stood in the ancient rain of Kathmandu and realized some memories never wash away?`,
-        script: res.fullScript || `[SCENE START]\nकाठमाडौँको यो चिसो झरीमा, कतै हराएका यादहरू फेरि ब्यूँतिए झैँ लाग्छ...\n\n[DIALOGUE]\n"के तिमीलाई याद छ, हामी यही मन्दिरको पेटीमा पहिलोपटक ओत लागेका थियौँ?"\n\n[VOICEOVER]\nमायाको यो वर्षा कहिल्यै नटुङ्गिने हाम्रो जीवनको सबैभन्दा सुन्दर अध्याय बन्यो।`,
-        characters: ['Aarav (25, contemplative musician in traditional wool jacket)', 'Maya (24, architect holding amber umbrella)'],
+        hook: res.summary ? res.summary.slice(0, 160) : `Narrative concept for ${projectName}`,
+        script: res.fullScript || res.summary || ideaPrompt,
+        characters: ['Lead protagonist / narrator', 'Key focal subjects'],
         estimatedDuration: duration,
-        musicSfx: 'Acoustic sarangi intro fading into gentle fingerstyle guitar and heavy rain ambiance',
+        musicSfx: music || 'Cinematic background score with tailored atmospheric sound design',
         scenes: scenesMapped,
         project: newProject
       });
-    } catch {
-      setError('Generation failed. Please try again with a descriptive prompt.');
+    } catch (err: any) {
+      console.error('Video Generator Error:', err);
+      setError(err?.message || 'Video plan generation failed. Please check your network and try again.');
     } finally {
       setIsGenerating(false);
     }

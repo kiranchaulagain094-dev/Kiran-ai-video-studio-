@@ -21,7 +21,9 @@ import {
   Mail,
   RefreshCw,
   Copy,
-  Check
+  Check,
+  Paperclip,
+  X
 } from 'lucide-react';
 import { StudioApiService } from '../../services/api';
 import { AIGuideChatMessage, RecommendedTool } from '../../types';
@@ -38,7 +40,7 @@ const INITIAL_GREETING_MESSAGE: AIGuideChatMessage = {
   role: 'assistant',
   content: `**What are you trying to create or accomplish?**
 
-Welcome to Kiran AI Video Studio! I am your personal AI Guide. Tell me your project idea or creative challenge in **any language** (Nepali, Romanized Nepali, Hindi, English, Spanish, or a mix). 
+Welcome to Kiran AI Video Studio! I am your personal AI Guide. Tell me your project idea or creative challenge in **any language** (Nepali, Romanized Nepali, Hindi, English, Spanish, or a mix). You can also upload a reference image or thumbnail for an AI visual audit.
 
 I will understand your goal, explain which real tools in our studio can help, and guide you through the process.`,
   timestamp: new Date().toISOString(),
@@ -71,12 +73,15 @@ export const AIWebsiteGuide: React.FC<AIWebsiteGuideProps> = ({ onNavigate }) =>
   });
 
   const [inputMessage, setInputMessage] = useState('');
+  const [attachedImageBase64, setAttachedImageBase64] = useState<string | null>(null);
+  const [attachedMimeType, setAttachedMimeType] = useState<string>('image/jpeg');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-scroll to bottom on message change
   const scrollToBottom = () => {
@@ -107,21 +112,38 @@ export const AIWebsiteGuide: React.FC<AIWebsiteGuideProps> = ({ onNavigate }) =>
     }
   };
 
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setAttachedMimeType(file.type || 'image/jpeg');
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setAttachedImageBase64(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   const handleSendMessage = async (textToSend?: string) => {
     const query = (textToSend || inputMessage).trim();
-    if (!query || isLoading) return;
+    if ((!query && !attachedImageBase64) || isLoading) return;
 
     setError(null);
     const userMsg: AIGuideChatMessage = {
       id: 'user-' + Date.now(),
       role: 'user',
-      content: query,
+      content: query || 'Please analyze this attached reference image and advise me.',
+      imageUrl: attachedImageBase64 || undefined,
       timestamp: new Date().toISOString()
     };
+
+    const currentAttachedBase64 = attachedImageBase64;
+    const currentMimeType = attachedMimeType;
 
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     setInputMessage('');
+    setAttachedImageBase64(null);
     setIsLoading(true);
 
     try {
@@ -135,8 +157,10 @@ export const AIWebsiteGuide: React.FC<AIWebsiteGuideProps> = ({ onNavigate }) =>
         }));
 
       const res = await StudioApiService.askAIGuide({
-        message: query,
-        history: historyPayload
+        message: query || 'Please analyze this attached image and guide me on how our studio can help.',
+        history: historyPayload,
+        imageBase64: currentAttachedBase64 || undefined,
+        mimeType: currentMimeType || undefined
       });
 
       // Filter and validate recommended tools against the live tools whitelist
@@ -344,6 +368,17 @@ export const AIWebsiteGuide: React.FC<AIWebsiteGuideProps> = ({ onNavigate }) =>
                         : 'bg-[#171c2b] text-slate-200 rounded-bl-sm border border-white/5 space-y-3 shadow-inner'
                     }`}
                   >
+                    {/* Render User Uploaded Reference Image if present */}
+                    {msg.imageUrl && (
+                      <div className="mb-2 max-w-xs rounded-xl overflow-hidden border border-white/20 shadow-md">
+                        <img 
+                          src={msg.imageUrl} 
+                          alt="Uploaded reference" 
+                          className="w-full max-h-48 object-cover"
+                        />
+                      </div>
+                    )}
+
                     {/* Formatted body with paragraph breaks and markdown bolding */}
                     <div className="whitespace-pre-line space-y-2">
                       {msg.content.split('\n\n').map((paragraph, pIdx) => {
@@ -489,6 +524,29 @@ export const AIWebsiteGuide: React.FC<AIWebsiteGuideProps> = ({ onNavigate }) =>
 
         {/* Chat Input Bar */}
         <div className="p-3 sm:p-4 bg-[#0d1017] border-t border-white/10 space-y-2">
+          {/* Attached image preview banner if active */}
+          {attachedImageBase64 && (
+            <div className="flex items-center gap-2 p-2 bg-[#171c2b] border border-white/10 rounded-xl max-w-sm">
+              <img 
+                src={attachedImageBase64} 
+                alt="Selected reference" 
+                className="w-10 h-10 object-cover rounded-lg border border-white/10"
+              />
+              <div className="flex-1 min-w-0">
+                <span className="text-[11px] text-white font-bold block truncate">Attached Reference Image</span>
+                <span className="text-[10px] text-slate-400 block">Will be analyzed with Gemini Vision</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAttachedImageBase64(null)}
+                className="p-1 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+                title="Remove attachment"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -496,6 +554,14 @@ export const AIWebsiteGuide: React.FC<AIWebsiteGuideProps> = ({ onNavigate }) =>
             }}
             className="flex flex-col sm:flex-row gap-2"
           >
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              accept="image/*" 
+              onChange={handleImageSelect} 
+              className="hidden" 
+            />
+
             <div className="relative flex-1">
               <textarea
                 ref={textareaRef}
@@ -506,20 +572,26 @@ export const AIWebsiteGuide: React.FC<AIWebsiteGuideProps> = ({ onNavigate }) =>
                 onKeyDown={handleKeyDown}
                 placeholder="What are you trying to create or accomplish? (e.g. YouTube video about Nepal, song SEO, thumbnail idea...)"
                 disabled={isLoading}
-                className="w-full bg-[#141824] text-white text-xs sm:text-sm px-3.5 py-2.5 rounded-2xl border border-white/10 focus:border-indigo-500 focus:outline-none placeholder-slate-500 resize-none leading-relaxed"
+                className="w-full bg-[#141824] text-white text-xs sm:text-sm pl-3.5 pr-10 py-2.5 rounded-2xl border border-white/10 focus:border-indigo-500 focus:outline-none placeholder-slate-500 resize-none leading-relaxed"
               />
-              <div className="hidden sm:block absolute right-3 bottom-3 text-[10px] text-slate-500">
-                Press Enter to send (Shift+Enter for new line)
-              </div>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isLoading}
+                title="Attach reference image or thumbnail for AI Vision analysis"
+                className="absolute right-3 top-3 text-slate-400 hover:text-indigo-400 transition-colors cursor-pointer"
+              >
+                <Paperclip className="w-4 h-4" />
+              </button>
             </div>
 
             <div className="flex items-center gap-2 justify-end sm:justify-start">
               <button
                 type="submit"
                 id="guide-send-message-button"
-                disabled={!inputMessage.trim() || isLoading}
+                disabled={(!inputMessage.trim() && !attachedImageBase64) || isLoading}
                 className={`px-5 py-2.5 sm:py-0 sm:h-full rounded-2xl font-bold text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg ${
-                  inputMessage.trim() && !isLoading
+                  (inputMessage.trim() || attachedImageBase64) && !isLoading
                     ? 'bg-gradient-to-r from-indigo-600 via-violet-600 to-cyan-500 hover:from-indigo-500 hover:to-cyan-400 text-white shadow-indigo-600/25 active:scale-95'
                     : 'bg-white/5 text-slate-500 border border-white/5 cursor-not-allowed'
                 }`}

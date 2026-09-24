@@ -185,9 +185,112 @@ export class StudioApiService {
     return await res.json();
   }
 
+  static async repurposeShorts(params: {
+    topic: string;
+    script?: string;
+  }): Promise<{
+    concepts: Array<{
+      title: string;
+      angle: string;
+      targetPlatform: string;
+      hook: string;
+      script: string;
+    }>;
+    hookVariations: Array<{ type: string; text: string }>;
+    viralAngles: Array<{ title: string; explanation: string }>;
+    carouselSlides: Array<{ slideNumber: number; headline: string; body: string }>;
+  }> {
+    const res = await fetch('/api/ai/repurpose-shorts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params)
+    });
+    if (!res.ok) {
+      const errorMsg = await this.parseError(res, 'Failed to generate social repurposing pack');
+      throw new Error(errorMsg);
+    }
+    return await res.json();
+  }
+
+  static async transformWriting(params: {
+    text: string;
+    tool: string;
+    language?: string;
+  }): Promise<{ success: boolean; result: string; tool: string }> {
+    const res = await fetch('/api/ai/writing-tool', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params)
+    });
+    if (!res.ok) {
+      const errorMsg = await this.parseError(res, 'Failed to process writing action');
+      throw new Error(errorMsg);
+    }
+    return await res.json();
+  }
+
+  static async generateContentSuite(params: {
+    toolType: 'ideas' | 'calendar' | 'script' | 'prompt' | 'shorts-caption';
+    topic: string;
+    options?: any;
+  }): Promise<{ success: boolean; toolType: string; data: any }> {
+    const res = await fetch('/api/ai/content-suite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params)
+    });
+    if (!res.ok) {
+      const errorMsg = await this.parseError(res, `Failed to generate ${params.toolType}`);
+      throw new Error(errorMsg);
+    }
+    return await res.json();
+  }
+
+  static async analyzeThumbnailImage(params: {
+    imageBase64: string;
+    mimeType?: string;
+    topic?: string;
+  }): Promise<{
+    success: boolean;
+    subjectAnalysis: string;
+    lightingAndContrast: string;
+    compositionFeedback: string;
+    clickabilityScore: number;
+    recommendedAdjustments: string[];
+  }> {
+    const res = await fetch('/api/ai/analyze-thumbnail-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params)
+    });
+    if (!res.ok) {
+      const errorMsg = await this.parseError(res, 'Failed to analyze reference image');
+      throw new Error(errorMsg);
+    }
+    return await res.json();
+  }
+
+  static async generateThumbnailImage(params: {
+    prompt: string;
+    aspectRatio?: '16:9' | '9:16' | '1:1';
+  }): Promise<{ success: boolean; imageBase64?: string; mimeType?: string }> {
+    const res = await fetch('/api/ai/generate-thumbnail-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params)
+    });
+    if (!res.ok) {
+      const errorMsg = await this.parseError(res, 'Direct AI image generation is unavailable');
+      throw new Error(errorMsg);
+    }
+    return await res.json();
+  }
+
   static async askAIGuide(params: {
     message: string;
     history?: Array<{ role: 'user' | 'assistant'; content: string }>;
+    imageBase64?: string;
+    mimeType?: string;
   }): Promise<AIGuideResponse> {
     const res = await fetch('/api/ai/guide', {
       method: 'POST',

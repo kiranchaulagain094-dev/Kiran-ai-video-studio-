@@ -1,34 +1,31 @@
 import React, { useState } from 'react';
 import { 
   Sparkles, 
-  Search, 
   Copy, 
   Check, 
-  RotateCcw, 
-  Sliders, 
-  TrendingUp, 
-  ShieldCheck, 
   Youtube, 
-  FileText, 
   Hash, 
   Tag, 
-  MessageSquare, 
-  Megaphone, 
-  Share2, 
-  Wand2,
-  ThumbsUp,
-  Info,
-  ChevronDown,
-  ChevronUp,
-  PenTool,
-  Languages,
+  FileText, 
+  TrendingUp, 
+  Wand2, 
+  HelpCircle,
+  AlertCircle,
+  Layers,
+  ArrowRight,
+  ShieldCheck,
   CheckCircle2,
   Maximize2,
   Minimize2,
   Heart,
   Clapperboard,
   Briefcase,
-  Zap
+  Zap,
+  Calendar,
+  Lightbulb,
+  Video,
+  Film,
+  MessageSquare
 } from 'lucide-react';
 import { AIContentPack, SEOAnalysisResult } from '../../types';
 import { StudioApiService } from '../../services/api';
@@ -50,7 +47,7 @@ export const ContentAssistant: React.FC<ContentAssistantProps> = ({
   initialTitle,
   initialDescription 
 }) => {
-  const [activeTab, setActiveTab] = useState<'youtube' | 'writing' | 'seo' | 'all'>('youtube');
+  const [activeTab, setActiveTab] = useState<'youtube' | 'writing' | 'power-suite' | 'seo'>('youtube');
 
   // Inputs
   const [prompt, setPrompt] = useState(
@@ -70,9 +67,18 @@ export const ContentAssistant: React.FC<ContentAssistantProps> = ({
   );
   const [activeWritingTool, setActiveWritingTool] = useState<string>('Rewrite');
   const [isProcessingWriting, setIsProcessingWriting] = useState(false);
+  const [writingError, setWritingError] = useState<string | null>(null);
+
+  // Power Suite State (Individual generators)
+  const [powerToolType, setPowerToolType] = useState<'ideas' | 'calendar' | 'script' | 'prompt' | 'shorts-caption'>('ideas');
+  const [powerTopic, setPowerTopic] = useState('Cinematic Travel Vlog through Pokhara and Annapurna');
+  const [isGeneratingPower, setIsGeneratingPower] = useState(false);
+  const [powerResult, setPowerResult] = useState<any>(null);
+  const [powerError, setPowerError] = useState<string | null>(null);
 
   // Loading & Content states
   const [isGenerating, setIsGenerating] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
   // 10 categorized title ideas as required by item 7
@@ -128,6 +134,7 @@ export const ContentAssistant: React.FC<ContentAssistantProps> = ({
     if (!prompt.trim()) return;
 
     setIsGenerating(true);
+    setErrorMessage(null);
     try {
       const pack = await StudioApiService.generateContentAssistant({
         prompt,
@@ -136,23 +143,27 @@ export const ContentAssistant: React.FC<ContentAssistantProps> = ({
         language,
         mainKeyword
       });
+
       setContentPack(pack);
 
-      // Re-generate categorized 10 titles based on new prompt
-      setTitleFormulas([
-        { category: 'Search-Focused', title: `${pack.youtubeTitle.slice(0, 60)} (Official)`, rationale: 'Exact search intent' },
-        { category: 'Curiosity-Driven', title: `The Truth About ${mainKeyword || 'This Secret'} Will Shock You...`, rationale: 'Curiosity gap' },
-        { category: 'Emotional', title: `Why ${prompt.slice(0, 45)} Changed Everything For Us`, rationale: 'Heartfelt emotional framing' },
-        { category: 'Listicle', title: `3 Urgent Things You Must Know About ${mainKeyword || 'This'}`, rationale: 'Numbered list appeal' },
-        { category: 'High-CTR', title: `Do NOT Ignore This: ${pack.youtubeTitle.slice(0, 45)}`, rationale: 'Urgent scroll-stopper' },
-        { category: 'Question', title: `Is This The Best Video on ${mainKeyword || 'This Topic'} in 2026?`, rationale: 'Engaging audience question' },
-        { category: 'Story-Driven', title: `From Scratch To Masterpiece: The Untold Journey`, rationale: 'Hero journey narrative' },
-        { category: 'How-To / Guide', title: `How To Master ${mainKeyword || 'Video Creation'} Step-by-Step`, rationale: 'Clear tutorial promise' },
-        { category: 'Direct & Clean', title: `${pack.youtubeTitle.split('|')[0].trim()}`, rationale: 'Authoritative simplicity' },
-        { category: 'Trend-Focused', title: `The 2026 Breakthrough In ${mainKeyword || 'Video Content'}`, rationale: 'Trend capitalizing' },
-      ]);
-    } catch {
-      // Safe fallback maintains content pack
+      if (pack.titleFormulas && Array.isArray(pack.titleFormulas) && pack.titleFormulas.length > 0) {
+        setTitleFormulas(pack.titleFormulas);
+      } else {
+        setTitleFormulas([
+          { category: 'Search-Focused', title: `${pack.youtubeTitle.slice(0, 60)} (Official)`, rationale: 'Exact search intent' },
+          { category: 'Curiosity-Driven', title: `The Truth About ${mainKeyword || 'This Secret'} Will Shock You...`, rationale: 'Curiosity gap' },
+          { category: 'Emotional', title: `Why ${prompt.slice(0, 45)} Changed Everything For Us`, rationale: 'Heartfelt emotional framing' },
+          { category: 'Listicle', title: `3 Urgent Things You Must Know About ${mainKeyword || 'This'}`, rationale: 'Numbered list appeal' },
+          { category: 'High-CTR', title: `Do NOT Ignore This: ${pack.youtubeTitle.slice(0, 45)}`, rationale: 'Urgent scroll-stopper' },
+          { category: 'Question', title: `Is This The Best Video on ${mainKeyword || 'This Topic'} in 2026?`, rationale: 'Engaging audience question' },
+          { category: 'Story-Driven', title: `From Scratch To Masterpiece: The Untold Journey`, rationale: 'Hero journey narrative' },
+          { category: 'How-To / Guide', title: `How To Master ${mainKeyword || 'Video Creation'} Step-by-Step`, rationale: 'Clear tutorial promise' },
+          { category: 'Direct & Clean', title: `${pack.youtubeTitle.split('|')[0].trim()}`, rationale: 'Authoritative simplicity' },
+          { category: 'Trend-Focused', title: `The 2026 Breakthrough In ${mainKeyword || 'Video Content'}`, rationale: 'Trend capitalizing' },
+        ]);
+      }
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Failed to generate content pack. Please verify your connection.');
     } finally {
       setIsGenerating(false);
     }
@@ -164,239 +175,501 @@ export const ContentAssistant: React.FC<ContentAssistantProps> = ({
     setTimeout(() => setCopiedField(null), 2000);
   };
 
-  // 10 AI Writing Tools Handler
-  const handleWritingTool = (tool: string) => {
+  // Real 10 AI Writing Tools Handler using Gemini Serverless Endpoint
+  const handleWritingTool = async (tool: string) => {
+    if (!writingInput.trim() || isProcessingWriting) return;
     setActiveWritingTool(tool);
     setIsProcessingWriting(true);
+    setWritingError(null);
 
-    setTimeout(() => {
-      let result = writingInput;
-      switch (tool) {
-        case 'Rewrite':
-          result = `A refreshed, dynamic perspective: ${writingInput.trim()}`;
-          break;
-        case 'Improve Hook':
-          result = `Stop scrolling! ${writingInput.trim().replace(/^In this video, I will show you/i, 'Here is the shocking truth about')} ...and why 99% get it wrong.`;
-          break;
-        case 'More Emotional':
-          result = `Deep within our memories, some moments remain timeless. ${writingInput.trim()} It touches a quiet place in the soul you never knew was waiting.`;
-          break;
-        case 'More Cinematic':
-          result = `The lens pulls wide across the mist-shrouded horizon. ${writingInput.trim()} Anamorphic flares dance against the rain, capturing an unforgettable visual symphony.`;
-          break;
-        case 'More Professional':
-          result = `Executive Summary: This production examines key strategic insights. ${writingInput.trim()} Prepared in accordance with premium audio-visual production standards.`;
-          break;
-        case 'Shorten':
-          result = writingInput.slice(0, Math.floor(writingInput.length * 0.55)) + '...';
-          break;
-        case 'Expand':
-          result = `${writingInput.trim()} Furthermore, this comprehensive analysis breaks down contextual background, creative direction, and practical takeaways for creators seeking maximum audience resonance.`;
-          break;
-        case 'Translate (Nepali)':
-          result = `यस भिडियोमा हामी विशेष कथा र मन छुने दृश्यहरू प्रस्तुत गर्दैछौँ: ${writingInput.trim()}`;
-          break;
-        case 'Grammar Fix':
-          result = writingInput.trim().replace(/\s+/g, ' ').replace(/([.?!])\s*(?=[a-z])/g, '$1 ');
-          break;
-        case 'Better CTA':
-          result = `${writingInput.trim()}\n\n👉 If this gave you value, tap Subscribe to Kiran AI Video Studio right now and join our creator circle!`;
-          break;
-        default:
-          result = writingInput;
+    try {
+      const res = await StudioApiService.transformWriting({
+        text: writingInput,
+        tool,
+        language
+      });
+      if (res && res.result) {
+        setWritingOutput(res.result);
       }
-      setWritingOutput(result);
+    } catch (err: any) {
+      setWritingError(err?.message || `Failed to execute ${tool}. Please try again.`);
+    } finally {
       setIsProcessingWriting(false);
-    }, 400);
+    }
+  };
+
+  // Creator Power Suite Generator
+  const handleGeneratePowerTool = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!powerTopic.trim() || isGeneratingPower) return;
+
+    setIsGeneratingPower(true);
+    setPowerError(null);
+
+    try {
+      const res = await StudioApiService.generateContentSuite({
+        toolType: powerToolType,
+        topic: powerTopic
+      });
+      setPowerResult(res.data);
+    } catch (err: any) {
+      setPowerError(err?.message || 'Failed to generate power tool assets.');
+    } finally {
+      setIsGeneratingPower(false);
+    }
   };
 
   const writingToolsList = [
-    { name: 'Rewrite', icon: RotateCcw, desc: 'Fresh perspective' },
-    { name: 'Improve Hook', icon: Zap, desc: 'High retention' },
-    { name: 'More Emotional', icon: Heart, desc: 'Touch hearts' },
-    { name: 'More Cinematic', icon: Clapperboard, desc: 'Visual flair' },
-    { name: 'More Professional', icon: Briefcase, desc: 'Formal tone' },
-    { name: 'Shorten', icon: Minimize2, desc: 'Cut fluff' },
-    { name: 'Expand', icon: Maximize2, desc: 'Add depth' },
-    { name: 'Translate (Nepali)', icon: Languages, desc: 'Nepali / English' },
-    { name: 'Grammar Fix', icon: CheckCircle2, desc: 'Perfect syntax' },
-    { name: 'Better CTA', icon: Megaphone, desc: 'Drive action' },
+    { id: 'Rewrite', label: 'Rewrite', icon: Wand2, desc: 'Fresh engaging perspective' },
+    { id: 'Improve Hook', label: 'Improve Hook', icon: Zap, desc: 'Stop scroll in 3 seconds' },
+    { id: 'More Emotional', label: 'More Emotional', icon: Heart, desc: 'Heartfelt nostalgic tone' },
+    { id: 'More Cinematic', label: 'More Cinematic', icon: Clapperboard, desc: 'Visual camera & foley cues' },
+    { id: 'More Professional', label: 'More Professional', icon: Briefcase, desc: 'Clear executive phrasing' },
+    { id: 'Shorten', label: 'Shorten', icon: Minimize2, desc: 'High-impact concise cut' },
+    { id: 'Expand', label: 'Expand', icon: Maximize2, desc: 'Contextual storytelling depth' },
+    { id: 'Translate (Nepali)', label: 'Translate (Nepali)', icon: Sparkles, desc: 'Fluent authentic Nepali' },
+    { id: 'Grammar Fix', label: 'Grammar Fix', icon: CheckCircle2, desc: 'Polish syntax and phrasing' },
+    { id: 'Better CTA', label: 'Better CTA', icon: ArrowRight, desc: 'Magnetic subscription trigger' },
   ];
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 pb-16">
-      {/* Header */}
+      {/* Top Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-500/20 text-cyan-300 text-xs font-semibold mb-2 border border-cyan-500/30">
             <Sparkles className="w-3.5 h-3.5" />
-            <span>YouTube SEO & AI Writing Suite</span>
+            <span>AI Content & SEO Suite</span>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-            SEO & Writing Assistant
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+            Content, Metadata & SEO Assistant
           </h1>
-          <p className="text-xs sm:text-sm text-slate-400 mt-1 max-w-2xl">
-            Complete YouTube metadata suite: 10 title archetypes, description, tags, hashtags, hook, pinned comment, community post, and 10 instant creative writing tools.
+          <p className="text-sm text-slate-400">
+            All-in-one suite: 10 Tested Title Formulas, YouTube Description with Timestamps, 10 Writing Tools, and 7-Metric SEO Audit.
           </p>
         </div>
 
-        {/* Tab Navigation */}
-        <div className="flex items-center p-1 bg-[#121622] rounded-2xl border border-white/10 shrink-0">
+        {/* View Switcher Tabs */}
+        <div className="flex items-center bg-[#121622] p-1.5 rounded-2xl border border-white/10 shrink-0 overflow-x-auto">
           <button
             onClick={() => setActiveTab('youtube')}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
-              activeTab === 'youtube' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap ${
+              activeTab === 'youtube'
+                ? 'bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-lg'
+                : 'text-slate-400 hover:text-white'
             }`}
           >
-            YouTube Suite
+            <Youtube className="w-4 h-4" />
+            <span>YouTube Metadata</span>
           </button>
+
           <button
             onClick={() => setActiveTab('writing')}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-              activeTab === 'writing' ? 'bg-cyan-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap ${
+              activeTab === 'writing'
+                ? 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-lg'
+                : 'text-slate-400 hover:text-white'
             }`}
           >
-            <PenTool className="w-3.5 h-3.5" />
+            <Wand2 className="w-4 h-4" />
             <span>10 Writing Tools</span>
           </button>
+
           <button
-            onClick={() => setActiveTab('seo')}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
-              activeTab === 'seo' ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+            onClick={() => setActiveTab('power-suite')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap ${
+              activeTab === 'power-suite'
+                ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg'
+                : 'text-slate-400 hover:text-white'
             }`}
           >
-            SEO Audit
+            <Zap className="w-4 h-4" />
+            <span>Creator Power Suite</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('seo')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap ${
+              activeTab === 'seo'
+                ? 'bg-gradient-to-r from-emerald-600 to-cyan-600 text-white shadow-lg'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <TrendingUp className="w-4 h-4" />
+            <span>SEO Scorecard</span>
           </button>
         </div>
       </div>
 
+      {/* Global Error Banner */}
+      {errorMessage && (
+        <div className="p-4 rounded-2xl bg-red-950/40 border border-red-500/30 text-xs text-red-200 flex items-center justify-between gap-3 animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+          <button
+            onClick={() => setErrorMessage(null)}
+            className="text-red-400 hover:text-red-200 font-bold shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* 1. 10 AI Writing Tools View */}
       {activeTab === 'writing' ? (
-        /* Dedicated 10 Creative Writing Tools View */
         <div className="space-y-6">
-          <div className="p-6 rounded-3xl bg-[#121622] border border-white/10 shadow-2xl space-y-6">
-            <div>
-              <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <PenTool className="w-4 h-4 text-cyan-400" />
-                <span>AI Creative Writing Tools (10 Instant Actions)</span>
-              </h2>
-              <p className="text-xs text-slate-400 mt-1">
-                Select any creative action to transform your script, hook, or text immediately.
-              </p>
+          <div className="p-6 rounded-3xl bg-[#121622] border border-white/10 shadow-xl space-y-6">
+            <div className="flex items-center justify-between pb-3 border-b border-white/5">
+              <div className="flex items-center gap-2">
+                <Wand2 className="w-5 h-5 text-indigo-400" />
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                    10 Dedicated AI Creative Writing Actions
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Genuinely powered by server-side Gemini: rewrite, sharpen hooks, translate to Nepali, or amplify cinematic emotion.
+                  </p>
+                </div>
+              </div>
             </div>
 
-            {/* 10 Tool Action Buttons Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+            {/* Tool Selection Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5">
               {writingToolsList.map((tool) => {
-                const Icon = tool.icon;
-                const isSelected = activeWritingTool === tool.name;
+                const IconComponent = tool.icon;
+                const isActive = activeWritingTool === tool.id;
                 return (
                   <button
-                    key={tool.name}
-                    type="button"
-                    onClick={() => handleWritingTool(tool.name)}
-                    className={`p-3 rounded-2xl border text-left transition-all active:scale-95 flex flex-col justify-between ${
-                      isSelected 
-                        ? 'bg-cyan-500/20 border-cyan-500/50 text-white shadow-lg shadow-cyan-500/10' 
-                        : 'bg-[#171c2b] border-white/5 text-slate-300 hover:border-white/20 hover:text-white'
-                    }`}
+                    key={tool.id}
+                    onClick={() => handleWritingTool(tool.id)}
+                    disabled={isProcessingWriting}
+                    className={`p-3 rounded-2xl border text-left transition-all active:scale-[0.98] ${
+                      isActive
+                        ? 'bg-indigo-600/30 border-indigo-500 text-white shadow-lg shadow-indigo-600/20'
+                        : 'bg-[#171c2b] border-white/5 text-slate-300 hover:border-indigo-500/30 hover:text-white'
+                    } disabled:opacity-50`}
                   >
-                    <Icon className={`w-4 h-4 mb-2 ${isSelected ? 'text-cyan-300' : 'text-slate-400'}`} />
-                    <div>
-                      <span className="text-xs font-bold block">{tool.name}</span>
-                      <span className="text-[10px] text-slate-500">{tool.desc}</span>
+                    <div className="flex items-center gap-2 mb-1">
+                      <IconComponent className={`w-3.5 h-3.5 ${isActive ? 'text-indigo-400' : 'text-slate-400'}`} />
+                      <span className="text-xs font-bold truncate">{tool.label}</span>
                     </div>
+                    <p className="text-[10px] text-slate-500 line-clamp-1">{tool.desc}</p>
                   </button>
                 );
               })}
             </div>
 
-            {/* Split Input & Output Editor */}
+            {writingError && (
+              <div className="p-3 rounded-xl bg-red-950/40 border border-red-500/30 text-xs text-red-200 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{writingError}</span>
+              </div>
+            )}
+
+            {/* Input & Output Split Canvas */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
               <div className="space-y-2">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-400 block">
-                  Original Text
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                    Input Text / Script Excerpt
+                  </label>
+                  <button
+                    onClick={() => setWritingInput('काठमाडौँको चिसो झरीमा पुरानो गल्लीहरूमा हिँड्दै तिम्रो याद आउँछ।')}
+                    className="text-[11px] text-indigo-400 hover:underline"
+                  >
+                    Use Nepali Sample
+                  </button>
+                </div>
                 <textarea
                   rows={6}
                   value={writingInput}
                   onChange={(e) => setWritingInput(e.target.value)}
-                  placeholder="Paste any script, intro, or talking points..."
-                  className="w-full bg-[#171c2b] text-white text-xs p-4 rounded-2xl border border-white/10 focus:border-cyan-500 focus:outline-none resize-none leading-relaxed"
+                  placeholder="Paste your video dialogue, voiceover, hook, or outline here..."
+                  className="w-full bg-[#171c2b] text-white text-xs rounded-2xl p-4 border border-white/10 focus:border-indigo-500 focus:outline-none resize-none leading-relaxed"
                 />
               </div>
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold uppercase tracking-wider text-cyan-400 block">
-                    {activeWritingTool} Output
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                    <span>Transformed Output:</span>
+                    <span className="text-indigo-400 font-mono">[{activeWritingTool}]</span>
                   </label>
                   <button
-                    onClick={() => copyToClipboard(writingOutput, 'writing-out')}
-                    className="text-xs text-cyan-400 hover:underline flex items-center gap-1 font-bold"
+                    onClick={() => copyToClipboard(writingOutput, 'writingOutput')}
+                    className="text-xs text-indigo-400 hover:underline flex items-center gap-1 font-bold"
                   >
-                    {copiedField === 'writing-out' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedField === 'writing-out' ? 'Copied' : 'Copy'}</span>
+                    {copiedField === 'writingOutput' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedField === 'writingOutput' ? 'Copied' : 'Copy Result'}</span>
                   </button>
                 </div>
-                <div className="w-full bg-[#0f121a] text-slate-200 text-xs p-4 rounded-2xl border border-white/5 min-h-[148px] flex flex-col justify-between leading-relaxed">
+                <div className="relative min-h-[144px] bg-[#0d1017] rounded-2xl p-4 border border-white/10 text-xs text-slate-200 leading-relaxed font-sans overflow-y-auto max-h-[180px]">
                   {isProcessingWriting ? (
-                    <div className="flex items-center gap-2 text-cyan-400 text-xs font-mono my-auto">
-                      <div className="w-3.5 h-3.5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-                      <span>Synthesizing creative transformation...</span>
+                    <div className="flex items-center justify-center h-28 text-slate-400 gap-2">
+                      <Sparkles className="w-4 h-4 text-indigo-400 animate-spin" />
+                      <span>Refining text with Gemini AI ({activeWritingTool})...</span>
                     </div>
                   ) : (
-                    <p className="whitespace-pre-wrap">{writingOutput}</p>
+                    writingOutput
                   )}
                 </div>
               </div>
             </div>
           </div>
         </div>
+      ) : activeTab === 'power-suite' ? (
+        /* 2. Creator AI Power Suite (Individual Generators) */
+        <div className="space-y-6">
+          <form onSubmit={handleGeneratePowerTool} className="p-6 rounded-3xl bg-[#121622] border border-white/10 shadow-xl space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-white/5">
+              <div className="flex items-center gap-2">
+                <Zap className="w-5 h-5 text-amber-400" />
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                    Creator AI Power Suite
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Standalone generators for Video Ideas, Content Calendars, Full Spoken Scripts, Visual Prompts, and Shorts Captions.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+              {[
+                { id: 'ideas', label: 'Video Ideas', icon: Lightbulb },
+                { id: 'calendar', label: 'Content Calendar', icon: Calendar },
+                { id: 'script', label: 'Spoken Script', icon: FileText },
+                { id: 'prompt', label: 'Visual Prompts', icon: Clapperboard },
+                { id: 'shorts-caption', label: 'Shorts Captions', icon: Film },
+              ].map((pt) => {
+                const IconComponent = pt.icon;
+                const isSelected = powerToolType === pt.id;
+                return (
+                  <button
+                    key={pt.id}
+                    type="button"
+                    onClick={() => {
+                      setPowerToolType(pt.id as any);
+                      setPowerResult(null);
+                    }}
+                    className={`p-3 rounded-2xl border text-center transition-all ${
+                      isSelected
+                        ? 'bg-amber-600/30 border-amber-500 text-white font-bold shadow-lg shadow-amber-600/20'
+                        : 'bg-[#171c2b] border-white/5 text-slate-300 hover:text-white'
+                    }`}
+                  >
+                    <IconComponent className="w-4 h-4 mx-auto mb-1 text-amber-400" />
+                    <span className="text-xs">{pt.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+                Topic or Channel Niche
+              </label>
+              <input
+                type="text"
+                value={powerTopic}
+                onChange={(e) => setPowerTopic(e.target.value)}
+                placeholder="e.g. Budget travel in Nepal, AI coding tutorials, Traditional cooking..."
+                className="w-full bg-[#171c2b] text-white text-xs rounded-xl p-3.5 border border-white/10 focus:border-amber-500 focus:outline-none"
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={isGeneratingPower}
+              className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-600 via-orange-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 text-white font-bold text-xs uppercase tracking-wider shadow-lg shadow-amber-600/25 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>{isGeneratingPower ? 'Generating with Gemini AI...' : `Generate ${powerToolType.toUpperCase()}`}</span>
+            </button>
+          </form>
+
+          {powerError && (
+            <div className="p-4 rounded-2xl bg-red-950/40 border border-red-500/30 text-xs text-red-200 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+              <span>{powerError}</span>
+            </div>
+          )}
+
+          {/* Result Display */}
+          {powerResult && (
+            <div className="p-6 rounded-3xl bg-[#121622] border border-white/10 shadow-xl space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b border-white/5">
+                <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                  Generated {powerToolType.toUpperCase()} Results
+                </span>
+                <button
+                  onClick={() => copyToClipboard(JSON.stringify(powerResult, null, 2), 'power-json')}
+                  className="text-xs text-amber-400 hover:underline flex items-center gap-1 font-bold"
+                >
+                  {copiedField === 'power-json' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedField === 'power-json' ? 'Copied' : 'Copy All'}</span>
+                </button>
+              </div>
+
+              {powerResult.ideas && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {powerResult.ideas.map((idea: any, idx: number) => (
+                    <div key={idx} className="p-4 rounded-2xl bg-[#171c2b] border border-white/5 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-amber-400 font-mono">Idea #{idx + 1}</span>
+                        <button
+                          onClick={() => copyToClipboard(idea.title, `idea-${idx}`)}
+                          className="text-slate-400 hover:text-white"
+                        >
+                          {copiedField === `idea-${idx}` ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                        </button>
+                      </div>
+                      <h4 className="text-xs font-bold text-white leading-snug">{idea.title}</h4>
+                      <p className="text-[11px] text-slate-300 italic bg-black/20 p-2 rounded-lg">"{idea.hook}"</p>
+                      <p className="text-[10px] text-slate-400">Retention: {idea.retentionStrategy}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {powerResult.calendar && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {powerResult.calendar.map((item: any, idx: number) => (
+                    <div key={idx} className="p-4 rounded-2xl bg-[#171c2b] border border-white/5 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono">
+                          Week {item.week}
+                        </span>
+                        <span className="text-[10px] text-slate-400">{item.publishDate}</span>
+                      </div>
+                      <h4 className="text-xs font-bold text-white">{item.title}</h4>
+                      <p className="text-[10px] text-indigo-300 font-semibold">{item.videoType}</p>
+                      <p className="text-[10px] text-slate-400">{item.productionMilestone}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {powerResult.bodyPoints && (
+                <div className="space-y-4">
+                  <div className="p-4 rounded-2xl bg-[#171c2b] border border-white/5 space-y-2">
+                    <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">Hook & Intro</span>
+                    <h4 className="text-sm font-bold text-white">{powerResult.title}</h4>
+                    <p className="text-xs text-amber-200 bg-black/30 p-3 rounded-xl border border-white/5 font-mono leading-relaxed">
+                      {powerResult.hook}
+                    </p>
+                    <p className="text-xs text-slate-300 leading-relaxed">{powerResult.introduction}</p>
+                  </div>
+
+                  <div className="space-y-3">
+                    {powerResult.bodyPoints.map((pt: any, idx: number) => (
+                      <div key={idx} className="p-4 rounded-2xl bg-[#171c2b] border border-white/5 space-y-1.5">
+                        <span className="text-[10px] font-bold text-indigo-400 uppercase">Section {idx + 1}: {pt.heading}</span>
+                        <p className="text-xs text-slate-200 leading-relaxed font-sans">{pt.spokenText}</p>
+                        <p className="text-[10px] text-slate-500 italic">Visual Cue: {pt.visualCue}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {powerResult.callToAction && (
+                    <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
+                      <strong>CTA:</strong> {powerResult.callToAction}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {powerResult.prompts && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {powerResult.prompts.map((p: any, idx: number) => (
+                    <div key={idx} className="p-4 rounded-2xl bg-[#171c2b] border border-white/5 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-amber-400 font-mono">{p.scene}</span>
+                        <button
+                          onClick={() => copyToClipboard(p.prompt, `prompt-${idx}`)}
+                          className="text-xs text-slate-400 hover:text-white"
+                        >
+                          {copiedField === `prompt-${idx}` ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                      <p className="text-xs text-slate-300 font-mono bg-black/30 p-3 rounded-xl border border-white/5 leading-relaxed">
+                        {p.prompt}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {powerResult.captions && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {powerResult.captions.map((c: any, idx: number) => (
+                    <div key={idx} className="p-4 rounded-2xl bg-[#171c2b] border border-white/5 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold text-cyan-400">{c.platform}</span>
+                        <button
+                          onClick={() => copyToClipboard(c.text, `cap-${idx}`)}
+                          className="text-xs text-slate-400 hover:text-white"
+                        >
+                          {copiedField === `cap-${idx}` ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                      <p className="text-xs text-slate-300 whitespace-pre-line leading-relaxed bg-black/30 p-3 rounded-xl border border-white/5">
+                        {c.text}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       ) : activeTab === 'seo' ? (
-        /* Dedicated SEO Audit View */
+        /* 3. SEO Scorecard View */
         contentPack && (
-          <div className="p-6 rounded-3xl bg-[#121622] border border-emerald-500/30 shadow-2xl space-y-6">
+          <div className="p-6 rounded-3xl bg-[#121622] border border-white/10 shadow-xl space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-white/5">
               <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
-                    Comprehensive YouTube SEO Audit
-                  </span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold">
-                    Objective Standards
-                  </span>
-                </div>
-                <h3 className="text-xl font-black text-white mt-1">
-                  SEO Optimization Score: {contentPack.seoAnalysis.score} / 100
+                <span className="text-xs font-bold uppercase tracking-wider text-cyan-400">
+                  Comprehensive 7-Metric SEO Score
+                </span>
+                <h3 className="text-xl font-bold text-white mt-1">
+                  Readiness Assessment: {contentPack.seoAnalysis.score} / 100
                 </h3>
-                <p className="text-xs text-slate-400 mt-0.5 max-w-xl">
+                <p className="text-xs text-slate-400 mt-0.5">
                   {contentPack.seoAnalysis.overallAssessment}
                 </p>
               </div>
 
-              <div className="p-3 rounded-xl bg-[#171c2b] border border-white/5 text-[11px] text-slate-400 flex items-start gap-2 max-w-xs">
-                <Info className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
-                <span>
-                  <strong>Realistic Evaluation:</strong> Scores evaluate search relevancy and visual hierarchy without claiming unproven virality guarantees.
-                </span>
+              <div className="flex items-center gap-3 bg-[#171c2b] px-4 py-2.5 rounded-2xl border border-white/5">
+                <ShieldCheck className="w-6 h-6 text-emerald-400" />
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Status</span>
+                  <span className="text-xs font-bold text-emerald-400">Production Ready</span>
+                </div>
               </div>
             </div>
 
-            {/* 7 Scoring Bars */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* 7 Metric Bars */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {[
-                { name: 'Keyword Relevance', data: contentPack.seoAnalysis.keywordRelevance },
-                { name: 'Search Intent Alignment', data: contentPack.seoAnalysis.searchIntent },
-                { name: 'Title Clarity & Mobile Hook', data: contentPack.seoAnalysis.titleClarity },
-                { name: 'Description Quality & Hierarchy', data: contentPack.seoAnalysis.descriptionQuality },
-                { name: 'Keyword Coverage (Short & Long-Tail)', data: contentPack.seoAnalysis.keywordCoverage },
-                { name: 'Readability & Spacing', data: contentPack.seoAnalysis.readability },
-                { name: 'Audience Relevance & Tone', data: contentPack.seoAnalysis.audienceRelevance },
+                { label: 'Keyword Relevance', data: contentPack.seoAnalysis.keywordRelevance },
+                { label: 'Search Intent Match', data: contentPack.seoAnalysis.searchIntent },
+                { label: 'Title Clarity & CTR', data: contentPack.seoAnalysis.titleClarity },
+                { label: 'Description Depth', data: contentPack.seoAnalysis.descriptionQuality },
+                { label: 'Keyword Coverage', data: contentPack.seoAnalysis.keywordCoverage },
+                { label: 'Readability & Pacing', data: contentPack.seoAnalysis.readability },
+                { label: 'Audience Relevance', data: contentPack.seoAnalysis.audienceRelevance },
               ].map((item, idx) => (
                 <div key={idx} className="p-4 rounded-2xl bg-[#171c2b] border border-white/5 space-y-2">
-                  <div className="flex items-center justify-between text-xs">
-                    <strong className="text-white font-semibold">{item.name}</strong>
-                    <span className="font-mono font-bold text-emerald-400">{item.data.score}%</span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-white">{item.label}</span>
+                    <span className="text-xs font-mono font-bold text-cyan-400">
+                      {item.data.score}/100
+                    </span>
                   </div>
                   <div className="w-full bg-[#0d1017] rounded-full h-1.5 overflow-hidden">
                     <div
@@ -413,9 +686,8 @@ export const ContentAssistant: React.FC<ContentAssistantProps> = ({
           </div>
         )
       ) : (
-        /* YouTube Suite View (Input form + 10 Title Archetypes + Description + Tags) */
+        /* 4. YouTube Suite View */
         <div className="space-y-6">
-          {/* Input Form */}
           <form onSubmit={handleGenerate} className="p-6 rounded-3xl bg-[#121622] border border-white/10 shadow-2xl space-y-5">
             <div>
               <div className="flex items-center justify-between mb-2">
@@ -511,7 +783,7 @@ export const ContentAssistant: React.FC<ContentAssistantProps> = ({
             </button>
           </form>
 
-          {/* 10 Title Archetypes (Item 7 Requirement) */}
+          {/* 10 Title Archetypes */}
           <div className="p-6 rounded-3xl bg-[#121622] border border-white/10 shadow-xl space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-white/5">
               <div className="flex items-center gap-2">
@@ -552,12 +824,10 @@ export const ContentAssistant: React.FC<ContentAssistantProps> = ({
             </div>
           </div>
 
-          {/* Detailed Deliverables (Description, Tags, Pinned Comment, Community Post) */}
+          {/* Description, Tags, Pinned Comment */}
           {contentPack && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              {/* Left 8 cols: Description & Community */}
               <div className="lg:col-span-8 space-y-6">
-                {/* Description */}
                 <div className="p-6 rounded-3xl bg-[#121622] border border-white/10 shadow-xl space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
@@ -576,7 +846,6 @@ export const ContentAssistant: React.FC<ContentAssistantProps> = ({
                   </pre>
                 </div>
 
-                {/* Pinned Comment & Community Tab Post */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="p-5 rounded-3xl bg-[#121622] border border-white/10 space-y-2">
                     <div className="flex items-center justify-between">
@@ -614,9 +883,7 @@ export const ContentAssistant: React.FC<ContentAssistantProps> = ({
                 </div>
               </div>
 
-              {/* Right 4 cols: Thumbnail Text, Tags, Hashtags */}
               <div className="lg:col-span-4 space-y-6">
-                {/* Thumbnail Text */}
                 <div className="p-5 rounded-3xl bg-gradient-to-br from-indigo-900/30 to-[#121622] border border-indigo-500/30 text-center space-y-2">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">
                     High-CTR Thumbnail Text
@@ -626,7 +893,6 @@ export const ContentAssistant: React.FC<ContentAssistantProps> = ({
                   </div>
                 </div>
 
-                {/* Hashtags */}
                 <div className="p-5 rounded-3xl bg-[#121622] border border-white/10 space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
@@ -651,7 +917,6 @@ export const ContentAssistant: React.FC<ContentAssistantProps> = ({
                   </div>
                 </div>
 
-                {/* YouTube Tags */}
                 <div className="p-5 rounded-3xl bg-[#121622] border border-white/10 space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold uppercase tracking-wider text-slate-400">

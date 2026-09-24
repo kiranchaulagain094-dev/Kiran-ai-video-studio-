@@ -89,6 +89,7 @@ export const MusicVideoPlanner: React.FC<MusicVideoPlannerProps> = ({
   const [audioFileName, setAudioFileName] = useState<string | null>(null);
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const [musicPlan, setMusicPlan] = useState<MusicVideoPlan | null>({
@@ -219,8 +220,9 @@ export const MusicVideoPlanner: React.FC<MusicVideoPlannerProps> = ({
           }
         });
       }
-    } catch {
-      // Safe fallback maintains current plan
+    } catch (err: any) {
+      console.error('Music Video Planner error:', err);
+      setErrorMessage(err?.message || 'Failed to analyze lyrics and plan music video. Please try again.');
     } finally {
       setIsAnalyzing(false);
     }
@@ -234,6 +236,19 @@ export const MusicVideoPlanner: React.FC<MusicVideoPlannerProps> = ({
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 pb-16">
+      {/* Global Error Banner */}
+      {errorMessage && (
+        <div className="p-4 rounded-2xl bg-red-950/40 border border-red-500/30 text-xs text-red-200 flex items-center justify-between gap-3 animate-in fade-in">
+          <span>{errorMessage}</span>
+          <button
+            onClick={() => setErrorMessage(null)}
+            className="text-red-400 hover:text-red-200 font-bold shrink-0 text-xs"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>

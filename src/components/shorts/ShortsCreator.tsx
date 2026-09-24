@@ -144,10 +144,13 @@ export const ShortsCreator: React.FC<ShortsCreatorProps> = ({ onOpenEditorWithSh
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackProgress, setPlaybackProgress] = useState(15);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [isRepurposing, setIsRepurposing] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsGenerating(true);
+    setErrorMessage(null);
     try {
       const plan = await StudioApiService.generateShortsPlan({
         topic,
@@ -159,10 +162,28 @@ export const ShortsCreator: React.FC<ShortsCreatorProps> = ({ onOpenEditorWithSh
         captionStyle
       });
       setShortsPlan(plan);
-    } catch {
-      // Safe fallback keeps active plan
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Failed to generate shorts plan. Please try again.');
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handleGenerateRepurpose = async () => {
+    setIsRepurposing(true);
+    setErrorMessage(null);
+    try {
+      const data = await StudioApiService.repurposeShorts({
+        topic,
+        script: shortsPlan?.script || script
+      });
+      if (data && data.concepts) {
+        setRepurposingData(data);
+      }
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Failed to generate social repurposing pack.');
+    } finally {
+      setIsRepurposing(false);
     }
   };
 
@@ -211,6 +232,15 @@ export const ShortsCreator: React.FC<ShortsCreatorProps> = ({ onOpenEditorWithSh
           </button>
         </div>
       </div>
+
+      {errorMessage && (
+        <div className="p-4 rounded-2xl bg-red-950/40 border border-red-500/30 text-xs text-red-200 flex items-center justify-between gap-3 animate-in fade-in">
+          <span>{errorMessage}</span>
+          <button onClick={() => setErrorMessage(null)} className="font-bold text-red-400 hover:text-red-200">
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {activeTab === 'shorts' ? (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -482,11 +512,22 @@ export const ShortsCreator: React.FC<ShortsCreatorProps> = ({ onOpenEditorWithSh
         <div className="space-y-8">
           {/* 3 Short Video Concepts */}
           <div className="p-6 rounded-3xl bg-[#121622] border border-white/10 shadow-xl space-y-4">
-            <div className="flex items-center gap-2 pb-2 border-b border-white/5">
-              <SplitSquareVertical className="w-4 h-4 text-indigo-400" />
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider">
-                3 Repurposed Short Video Concepts (Shorts / Reels / TikTok)
-              </h3>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/5">
+              <div className="flex items-center gap-2">
+                <SplitSquareVertical className="w-4 h-4 text-indigo-400" />
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                  3 Repurposed Short Video Concepts (Shorts / Reels / TikTok)
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={handleGenerateRepurpose}
+                disabled={isRepurposing}
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-xs font-bold flex items-center gap-2 transition-all disabled:opacity-50 shrink-0"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>{isRepurposing ? 'Synthesizing with Gemini...' : 'Synthesize 3 Viral Angles with AI'}</span>
+              </button>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
