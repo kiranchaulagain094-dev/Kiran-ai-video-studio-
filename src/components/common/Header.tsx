@@ -32,6 +32,7 @@ export const Header: React.FC<HeaderProps> = ({
 
   const navItems = [
     { id: 'landing', label: 'Home' },
+    { id: 'timeline-planner', label: '1-Min Timeline' },
     { id: 'articles', label: 'Creator Guides' },
     { id: 'ai-guide', label: 'AI Guide' },
     { id: 'video-generator', label: 'Video Planner' },
@@ -47,7 +48,9 @@ export const Header: React.FC<HeaderProps> = ({
     const query = searchQuery.trim().toLowerCase();
     if (!query) return;
 
-    if (query.includes('article') || query.includes('blog') || query.includes('learn') || query.includes('how to')) {
+    if (query.includes('1-min') || query.includes('flow') || query.includes('timeline') || query.includes('scene by scene') || query.includes('60')) {
+      onNavigate('timeline-planner');
+    } else if (query.includes('article') || query.includes('blog') || query.includes('learn') || query.includes('how to')) {
       onNavigate('articles');
     } else if (query.includes('guide') || query.includes('help') || query.includes('which tool') || query.includes('recommend')) {
       onNavigate('ai-guide');

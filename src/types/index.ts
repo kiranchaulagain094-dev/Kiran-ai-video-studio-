@@ -269,3 +269,35 @@ export interface Article {
   relatedArticleSlugs: string[];
 }
 
+export interface OneMinuteTimelineScene {
+  id: string;
+  sceneNumber: number;
+  timeRange: string; // e.g. "00:00–00:08"
+  startSeconds: number; // e.g. 0
+  endSeconds: number; // e.g. 8
+  durationSeconds: number; // e.g. 8
+  voiceover: string;
+  visual: string;
+  onScreenText: string;
+  flowPrompt: string; // Google Flow ready prompt
+}
+
+export interface OneMinuteTimelinePlan {
+  title: string;
+  totalDuration: string; // "01:00"
+  totalDurationSeconds: number; // 60
+  aspectRatio: '16:9' | '9:16' | '1:1';
+  videoStyle: string;
+  visualStyle: string;
+  language: string;
+  scenesCount: number;
+  scenes: OneMinuteTimelineScene[];
+  fullCombinedScript: string;
+  musicSoundDirection: string;
+  transitionStyle: string;
+  finalCta: string;
+  continuityNotes?: string;
+  createdAt?: string;
+}
+
+

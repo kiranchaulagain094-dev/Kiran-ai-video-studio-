@@ -15,7 +15,8 @@ import {
   Info,
   HelpCircle,
   ExternalLink,
-  BookOpen
+  BookOpen,
+  Clock
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -36,6 +37,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'articles', label: 'Creator Guides', icon: BookOpen, badge: '30' },
     { id: 'ai-guide', label: 'AI Website Guide', icon: Compass, badge: 'Guide' },
     { id: 'video-generator', label: 'AI Video Planner', icon: Video, badge: 'AI' },
+    { id: 'timeline-planner', label: '1-Min Timeline', icon: Clock, badge: 'Flow' },
     { id: 'shorts-creator', label: 'Shorts Creator', icon: Film, badge: '9:16' },
     { id: 'video-editor', label: 'Video Editor', icon: Scissors },
     { id: 'thumbnail-maker', label: 'Thumbnail Maker', icon: ImageIcon },

@@ -11,6 +11,7 @@ import { ThumbnailMaker } from './components/thumbnail/ThumbnailMaker';
 import { ProjectsManager } from './components/projects/ProjectsManager';
 import { TemplatesLibrary } from './components/templates/TemplatesLibrary';
 import { MusicVideoPlanner } from './components/music/MusicVideoPlanner';
+import { OneMinuteTimelinePlanner } from './components/timeline/OneMinuteTimelinePlanner';
 import { AIWebsiteGuide } from './components/guide/AIWebsiteGuide';
 import { Footer } from './components/common/Footer';
 import { AboutUs } from './components/legal/AboutUs';
@@ -63,6 +64,7 @@ const parsePath = (pathname: string): { route: string; slug?: string } => {
   }
 
   if (clean === 'projects' || clean === 'project') return { route: 'projects' };
+  if (clean === 'timeline-planner' || clean === '1min-timeline' || clean === 'timeline' || clean === 'flow' || clean === 'video-timeline') return { route: 'timeline-planner' };
   if (clean === 'ai-guide' || clean === 'guide' || clean === 'website-guide' || clean === 'assistant-guide') return { route: 'ai-guide' };
   if (clean === 'settings' || clean === 'setting') return { route: 'settings' };
   if (clean === 'video-generator' || clean === 'generator' || clean === 'generate') return { route: 'video-generator' };
@@ -367,6 +369,18 @@ export default function App() {
                 refreshProjects();
                 handleOpenProjectInEditor(shortsProject);
               }}
+            />
+          )}
+
+          {/* 1-Minute AI Video Timeline Planner */}
+          {currentRoute === 'timeline-planner' && (
+            <OneMinuteTimelinePlanner
+              onOpenEditor={(project) => {
+                StudioApiService.saveProject(project);
+                refreshProjects();
+                handleOpenProjectInEditor(project);
+              }}
+              onNavigateHome={() => navigateTo('landing')}
             />
           )}
 

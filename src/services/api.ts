@@ -5,7 +5,9 @@ import {
   ShortsGenerationPlan,
   ThumbnailConcept,
   VideoScene,
-  AIGuideResponse
+  AIGuideResponse,
+  OneMinuteTimelinePlan,
+  OneMinuteTimelineScene
 } from '../types';
 
 import { INITIAL_PROJECTS, INITIAL_TEMPLATES } from '../data/mockData';
@@ -299,6 +301,48 @@ export class StudioApiService {
     });
     if (!res.ok) {
       const errorMsg = await this.parseError(res, 'Failed to reach AI Website Guide');
+      throw new Error(errorMsg);
+    }
+    return await res.json();
+  }
+
+  static async generateOneMinuteTimeline(params: {
+    topic: string;
+    script?: string;
+    videoStyle?: string;
+    language?: string;
+    visualStyle?: string;
+    aspectRatio?: '16:9' | '9:16' | '1:1';
+  }): Promise<OneMinuteTimelinePlan> {
+    const res = await fetch('/api/ai/timeline-planner', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params)
+    });
+    if (!res.ok) {
+      const errorMsg = await this.parseError(res, 'Failed to generate 1-minute video timeline');
+      throw new Error(errorMsg);
+    }
+    return await res.json();
+  }
+
+  static async regenerateTimelineScene(params: {
+    topic: string;
+    scene: OneMinuteTimelineScene;
+    instruction?: string;
+    visualStyle?: string;
+    aspectRatio?: string;
+    language?: string;
+    previousScenePrompt?: string;
+    nextScenePrompt?: string;
+  }): Promise<{ success: boolean; scene: OneMinuteTimelineScene }> {
+    const res = await fetch('/api/ai/timeline-regenerate-scene', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params)
+    });
+    if (!res.ok) {
+      const errorMsg = await this.parseError(res, 'Failed to regenerate scene');
       throw new Error(errorMsg);
     }
     return await res.json();

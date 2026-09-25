@@ -422,7 +422,8 @@ apiRouter.get(['/', '/health', '/api/health', '/status'], (req, res) => {
       contentSuite: true,
       thumbnailMaker: true,
       thumbnailVisionAnalysis: true,
-      musicVideoPlanner: true
+      musicVideoPlanner: true,
+      timelinePlanner: true
     }
   });
 });
@@ -1410,7 +1411,262 @@ Respond ONLY with valid JSON:
   }
 });
 
-// 11. Video Generation Background Jobs
+// Helper to guarantee mathematically exact 60-second timeline (00:00 to 01:00)
+function normalizeTimelineScenes(scenes: any[]): any[] {
+  if (!Array.isArray(scenes) || scenes.length === 0) return [];
+
+  const formatTime = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  // 1. Ensure durationSeconds is positive integer
+  let rawDurations = scenes.map(s => Math.max(2, Math.round(Number(s.durationSeconds) || 8)));
+  let sum = rawDurations.reduce((a, b) => a + b, 0);
+
+  // If sum !== 60, adjust the largest duration or adjust diff
+  if (sum !== 60) {
+    const diff = 60 - sum;
+    let maxIdx = 0;
+    for (let i = 1; i < rawDurations.length; i++) {
+      if (rawDurations[i] > rawDurations[maxIdx]) maxIdx = i;
+    }
+    rawDurations[maxIdx] = Math.max(3, rawDurations[maxIdx] + diff);
+    sum = rawDurations.reduce((a, b) => a + b, 0);
+    if (sum !== 60) {
+      rawDurations[rawDurations.length - 1] += (60 - sum);
+    }
+  }
+
+  let currentStart = 0;
+  return scenes.map((s, idx) => {
+    const duration = rawDurations[idx];
+    const start = currentStart;
+    const end = start + duration;
+    currentStart = end;
+
+    return {
+      id: s.id || `scene-${idx + 1}`,
+      sceneNumber: idx + 1,
+      timeRange: `${formatTime(start)}–${formatTime(end)}`,
+      startSeconds: start,
+      endSeconds: end,
+      durationSeconds: duration,
+      voiceover: s.voiceover || '',
+      visual: s.visual || '',
+      onScreenText: s.onScreenText || '',
+      flowPrompt: s.flowPrompt || ''
+    };
+  });
+}
+
+// 11. 1-Minute AI Video Timeline Planner (Exact 60 Seconds with Google Flow Prompts)
+apiRouter.post(['/ai/timeline-planner', '/api/ai/timeline-planner'], async (req, res) => {
+  try {
+    const { topic, script, videoStyle, language, visualStyle, aspectRatio } = req.body;
+    if (!topic || typeof topic !== 'string' || topic.trim() === '') {
+      return res.status(400).json({ success: false, error: 'Video topic or idea is required.' });
+    }
+
+    const ai = getGeminiClient();
+    if (!ai) {
+      return res.status(503).json({
+        success: false,
+        error: 'Gemini API key is not configured. Please verify GEMINI_API_KEY in environment variables.'
+      });
+    }
+
+    const chosenStyle = (videoStyle || 'Cinematic').trim();
+    const chosenLang = (language || 'English').trim();
+    const chosenVisual = (visualStyle || 'Photorealistic Cinematic').trim();
+    const chosenAr = (aspectRatio || '16:9').trim();
+
+    const prompt = `You are a world-class AI Video Director & Prompt Engineer for Kiran AI Video Studio.
+Generate an EXACT 60-SECOND SCENE-BY-SCENE PRODUCTION TIMELINE tailored directly for Google Flow and modern generative AI video tools.
+
+INPUT DETAILS:
+- Topic / Idea: "${topic}"
+- User Full Script (Optional): ${script && script.trim() ? `"${script.trim()}"` : 'None provided. Generate an intelligent, highly engaging 60-second voiceover script.'}
+- Video Style: "${chosenStyle}"
+- Target Language: "${chosenLang}"
+- Visual Style: "${chosenVisual}"
+- Target Aspect Ratio: "${chosenAr}"
+
+CRITICAL PRODUCTION SPECIFICATIONS:
+1. EXACT 60 SECONDS TOTAL DURATION (00:00 to 01:00):
+   - Intelligently divide the video into 4 to 8 scenes (e.g. 5, 6, or 7 scenes). Do not force an arbitrary fixed scene count.
+   - Assign integer seconds to each scene (durationSeconds >= 3). The sum of all scene durations MUST equal exactly 60 seconds.
+   - Format each scene's timeRange consecutively: e.g. "00:00–00:08", "00:08–00:18", etc. ending precisely at 01:00.
+
+2. STORYTELLING STRUCTURE FOR "${chosenStyle}":
+   - YouTube Explainer: Hook -> Problem -> Step 1 / Concept -> Step 2 / Deep Dive -> Result -> CTA
+   - Product / Tech Promo: Hook -> Pain Point -> Product Intro -> Features Demo -> Key Benefit -> CTA
+   - Music Video: Atmospheric Intro -> Performance / Verse -> Story Development -> Chorus Climax -> Lingering Outro
+   - Cinematic / Documentary: Cinematic Hook -> Context & Setting -> Main Development -> Emotional Climax -> Payoff & Reflection
+   - Social Media / Reel: 3-Second Hook -> High Pacing Story -> Visual Twist -> Value Delivery -> Follow CTA
+
+3. GOOGLE FLOW PROMPT PER SCENE:
+   For EACH scene, construct a standalone, high-fidelity Google Flow prompt describing:
+   - Main subject & specific physical action
+   - Environment / setting with background texture
+   - Character appearance (maintain strict character consistency across scenes, including clothing, hair, facial features)
+   - Camera movement (e.g., slow forward dolly, smooth orbit, tracking shot, low-angle push-in, static wide)
+   - Camera angle (e.g., eye-level, low angle, overhead macro, extreme close-up)
+   - Lighting (e.g., golden hour rim light, soft volumetric studio illumination, moody neon backlight)
+   - Mood & color palette (e.g., warm cinematic amber, sleek futuristic teal, crisp 4K documentary)
+   - Visual style: ${chosenVisual}, cinematic lighting, photorealistic textures, clean bokeh, 4K resolution
+   - Continuity reference to previous/next scene
+   - Aspect ratio parameter: --ar ${chosenAr}
+
+4. MULTILINGUAL INSTRUCTIONS:
+   - The user may write in English, Nepali (Devanagari or Romanized like "Ma YouTube ko lagi video banauna chahanchu"), Hindi, or mixed. Understand the semantic intent deeply.
+   - VOICEOVER / SCRIPT and ON-SCREEN TEXT MUST be written in the user's requested language ("${chosenLang}").
+   - GOOGLE FLOW PROMPT MUST be written in rich, descriptive English for optimal video AI synthesis.
+
+OUTPUT JSON FORMAT (Return ONLY raw valid JSON, no markdown outside JSON):
+{
+  "title": "Engaging Video Title",
+  "totalDuration": "01:00",
+  "totalDurationSeconds": 60,
+  "aspectRatio": "${chosenAr}",
+  "videoStyle": "${chosenStyle}",
+  "visualStyle": "${chosenVisual}",
+  "language": "${chosenLang}",
+  "scenesCount": 6,
+  "scenes": [
+    {
+      "id": "scene-1",
+      "sceneNumber": 1,
+      "timeRange": "00:00–00:08",
+      "startSeconds": 0,
+      "endSeconds": 8,
+      "durationSeconds": 8,
+      "voiceover": "Voiceover line timed accurately for this scene duration...",
+      "visual": "Director's cinematic visual description of what happens on screen...",
+      "onScreenText": "On-screen text or headline graphic...",
+      "flowPrompt": "Google Flow ready prompt with subject, environment, lighting, camera movement, and --ar ${chosenAr}"
+    }
+  ],
+  "fullCombinedScript": "Full spoken voiceover script combining all scenes...",
+  "musicSoundDirection": "Detailed music tempo, rhythm, instruments, and audio sound effects cues...",
+  "transitionStyle": "Cinematic match cuts, whip pans, and seamless visual transitions...",
+  "finalCta": "Clear call to action for the end screen...",
+  "continuityNotes": "Character wardrobe, recurring lighting cues, and visual subject consistency details."
+}`;
+
+    const rawResponse = await generateGeminiContentWithFallback(ai, prompt);
+    const parsed = extractJsonFromText(rawResponse);
+
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('AI returned an invalid response structure.');
+    }
+
+    const rawScenes = Array.isArray(parsed.scenes) ? parsed.scenes : [];
+    const normalizedScenes = normalizeTimelineScenes(rawScenes);
+
+    const fullScript = parsed.fullCombinedScript || 
+      normalizedScenes.map(s => s.voiceover).filter(Boolean).join(' ');
+
+    const finalResult = {
+      success: true,
+      title: parsed.title || topic,
+      totalDuration: '01:00',
+      totalDurationSeconds: 60,
+      aspectRatio: chosenAr,
+      videoStyle: chosenStyle,
+      visualStyle: chosenVisual,
+      language: chosenLang,
+      scenesCount: normalizedScenes.length,
+      scenes: normalizedScenes,
+      fullCombinedScript: fullScript,
+      musicSoundDirection: parsed.musicSoundDirection || 'Modern ambient cinematic synth with rhythmic pulse',
+      transitionStyle: parsed.transitionStyle || 'Smooth motion blur pans and seamless focal match cuts',
+      finalCta: parsed.finalCta || 'Follow for more insightful content',
+      continuityNotes: parsed.continuityNotes || 'Consistent character appearance and lighting atmosphere maintained across all scenes',
+      createdAt: new Date().toISOString()
+    };
+
+    res.json(finalResult);
+  } catch (err: any) {
+    console.error('1-Minute Timeline Planner error:', err);
+    res.status(500).json({
+      success: false,
+      error: err?.message || 'Failed to generate 1-minute video timeline. Please try again.'
+    });
+  }
+});
+
+// 12. Regenerate Single Timeline Scene
+apiRouter.post(['/ai/timeline-regenerate-scene', '/api/ai/timeline-regenerate-scene'], async (req, res) => {
+  try {
+    const { 
+      topic, 
+      scene, 
+      instruction, 
+      visualStyle, 
+      aspectRatio, 
+      language,
+      previousScenePrompt, 
+      nextScenePrompt 
+    } = req.body;
+
+    if (!scene || typeof scene !== 'object') {
+      return res.status(400).json({ success: false, error: 'Current scene details are required.' });
+    }
+
+    const ai = getGeminiClient();
+    if (!ai) {
+      return res.status(503).json({ success: false, error: 'Gemini API key is not configured.' });
+    }
+
+    const prompt = `You are an AI Video Director for Kiran AI Video Studio.
+Regenerate Scene #${scene.sceneNumber} (${scene.timeRange}, ${scene.durationSeconds}s) for video topic "${topic || 'General Video'}".
+
+USER ADJUSTMENT INSTRUCTION:
+"${instruction || 'Enhance the cinematic visual description and make the Google Flow prompt more vivid and detailed.'}"
+
+CONTEXT & CONTINUITY:
+- Previous Scene Flow Prompt: ${previousScenePrompt ? `"${previousScenePrompt}"` : 'None (Start of video)'}
+- Next Scene Flow Prompt: ${nextScenePrompt ? `"${nextScenePrompt}"` : 'None (End of video)'}
+- Visual Style: "${visualStyle || 'Photorealistic Cinematic'}"
+- Aspect Ratio: "${aspectRatio || '16:9'}"
+- Target Language: "${language || 'English'}"
+
+Return ONLY valid JSON:
+{
+  "voiceover": "Updated spoken voiceover script in ${language || 'English'}...",
+  "visual": "Updated cinematic visual description...",
+  "onScreenText": "Updated on-screen text...",
+  "flowPrompt": "Updated high-quality Google Flow prompt with subject, camera, lighting, style, and --ar ${aspectRatio || '16:9'}"
+}`;
+
+    const rawResponse = await generateGeminiContentWithFallback(ai, prompt);
+    const parsed = extractJsonFromText(rawResponse);
+
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('AI returned an invalid response structure.');
+    }
+
+    const updatedScene = {
+      ...scene,
+      voiceover: parsed.voiceover || scene.voiceover,
+      visual: parsed.visual || scene.visual,
+      onScreenText: parsed.onScreenText || scene.onScreenText,
+      flowPrompt: parsed.flowPrompt || scene.flowPrompt
+    };
+
+    res.json({ success: true, scene: updatedScene });
+  } catch (err: any) {
+    console.error('Scene regeneration error:', err);
+    res.status(500).json({
+      success: false,
+      error: err?.message || 'Failed to regenerate scene. Please try again.'
+    });
+  }
+});
+
+// 13. Video Generation Background Jobs
 apiRouter.post(['/video/jobs', '/api/video/jobs'], async (req, res) => {
   try {
     const job = await VideoGenerationService.startJob(req.body);
