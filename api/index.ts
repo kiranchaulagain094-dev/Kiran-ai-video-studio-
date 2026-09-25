@@ -1162,6 +1162,11 @@ apiRouter.post(['/ai/guide', '/api/ai/guide'], async (req, res) => {
         name: 'Contact Us',
         route: 'contact-us',
         purpose: 'Direct contact form and email (kiranchaulagain094@gmail.com) for inquiries, feedback, and support.'
+      },
+      'articles': {
+        name: 'Creator Guides',
+        route: 'articles',
+        purpose: 'Complete educational knowledge hub containing original publisher guides on YouTube SEO, title formulas, thumbnail design, Shorts hooks, scriptwriting, and content planning in Nepali and English.'
       }
     };
 
@@ -1175,16 +1180,17 @@ apiRouter.post(['/ai/guide', '/api/ai/guide'], async (req, res) => {
 Your purpose: Understand what the visitor needs and explain which Kiran AI Video Studio tools/features can help them.
 
 CURRENT AVAILABLE TOOLS ON KIRAN AI VIDEO STUDIO:
-1. "video-generator" (AI Video Planner): Multi-scene screenplay, scriptwriting, camera movements, dialogue, voiceover, sound cues, visual prompts for full videos.
-2. "shorts-creator" (Shorts & Reels Creator): 9:16 vertical video storyboarder, 3-second hook scripts, fast visual pacing, on-screen text, captions for YouTube Shorts/TikTok/Reels.
-3. "content-assistant" (Content & SEO Assistant): YouTube SEO, 10 title formulas, description with timestamps, tags, hashtags, pinned comment, community post, 10 creative writing tools, and 7-metric SEO score.
-4. "thumbnail-maker" (Thumbnail Concept Designer): High-CTR thumbnail composition, visual layout rules (Rule of Thirds), bold headline typography, color palettes, and AI image generator prompts.
-5. "video-editor" (Timeline Video Editor): In-browser multi-track timeline video editor to arrange video, audio, and subtitle layers, trim clips, and preview playback.
-6. "music-video" (Music Video Storyboarder): Narrative storyboarder specialized for songs (Nepali folk, acoustic, modern pop, romantic) with verse-by-verse scene breakdowns and character emotion arcs.
-7. "templates" (Templates Library): Pre-built video & short templates ready to load into the planner.
-8. "projects" (My Projects): Workspace project manager stored in browser to manage and reopen saved video plans.
-9. "about-us" (About Us): Creator biography of Kiran Chaulagain and studio mission.
-10. "contact-us" (Contact Us): Direct contact form and official email (kiranchaulagain094@gmail.com).
+1. "articles" (Creator Guides): Original educational publisher guides on YouTube SEO, beginner strategies, title formulas, thumbnail psychology, 9:16 Shorts hooks, scripting, and content planning in Nepali and English.
+2. "video-generator" (AI Video Planner): Multi-scene screenplay, scriptwriting, camera movements, dialogue, voiceover, sound cues, visual prompts for full videos.
+3. "shorts-creator" (Shorts & Reels Creator): 9:16 vertical video storyboarder, 3-second hook scripts, fast visual pacing, on-screen text, captions for YouTube Shorts/TikTok/Reels.
+4. "content-assistant" (Content & SEO Assistant): YouTube SEO, 10 title formulas, description with timestamps, tags, hashtags, pinned comment, community post, 10 creative writing tools, and 7-metric SEO score.
+5. "thumbnail-maker" (Thumbnail Concept Designer): High-CTR thumbnail composition, visual layout rules (Rule of Thirds), bold headline typography, color palettes, and AI image generator prompts.
+6. "video-editor" (Timeline Video Editor): In-browser multi-track timeline video editor to arrange video, audio, and subtitle layers, trim clips, and preview playback.
+7. "music-video" (Music Video Storyboarder): Narrative storyboarder specialized for songs (Nepali folk, acoustic, modern pop, romantic) with verse-by-verse scene breakdowns and character emotion arcs.
+8. "templates" (Templates Library): Pre-built video & short templates ready to load into the planner.
+9. "projects" (My Projects): Workspace project manager stored in browser to manage and reopen saved video plans.
+10. "about-us" (About Us): Creator biography of Kiran Chaulagain and studio mission.
+11. "contact-us" (Contact Us): Direct contact form and official email (kiranchaulagain094@gmail.com).
 
 CRITICAL RULES:
 1. LANGUAGE SUPPORT:
@@ -1423,10 +1429,11 @@ apiRouter.get(['/video/jobs/:id', '/api/video/jobs/:id'], async (req, res) => {
   }
 });
 
-// Mount the API Router at '/api', '/', and health endpoint for robust routing
+// Mount the API Router specifically at '/api', '/health', and '/status'
+// IMPORTANT: Do NOT mount at bare '/' so that Vite middlewares can serve the SPA frontend!
 app.use('/api', apiRouter);
 app.use('/health', apiRouter);
-app.use(apiRouter);
+app.use('/status', apiRouter);
 
 // Explicit 404 Handler for unrecognized API routes
 app.use('/api', (req, res) => {

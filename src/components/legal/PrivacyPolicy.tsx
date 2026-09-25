@@ -68,7 +68,7 @@ export const PrivacyPolicy: React.FC<PrivacyPolicyProps> = ({ onNavigate }) => {
             </p>
             <ul className="list-disc list-inside space-y-1 text-slate-300 text-sm mt-2 ml-2">
               <li><strong>Project Drafts:</strong> Saved locally in your browser's <code className="text-indigo-300">localStorage</code> so you can resume work without loss.</li>
-              <li><strong>Server Persistence:</strong> When projects are explicitly saved or synchronized, project records (title, aspect ratio, duration, scene breakdown) are securely stored in the studio database linked to your session.</li>
+              <li><strong>Local Storage Only:</strong> All project drafts, scene breakdowns, timeline cuts, and metadata are saved strictly inside your web browser's <code className="text-indigo-300">localStorage</code>. We do not store your creative projects or scripts on a remote database server.</li>
               <li><strong>AI Generation Inputs:</strong> Prompts submitted to the AI Video Planner or Content Assistant are processed to generate storyboard outlines and SEO tags.</li>
             </ul>
           </div>

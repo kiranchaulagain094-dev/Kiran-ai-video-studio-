@@ -1,13 +1,24 @@
-import { Article } from '../../types';
+import { Article } from '../../types/index';
+import { CORE_15_CREATOR_GUIDES } from '../creatorGuides';
 import { articlesGroup1 } from './group1';
 import { articlesGroup2 } from './group2';
 import { articlesGroup3 } from './group3';
 
-export const ALL_ARTICLES: Article[] = [
+// Combine the 15 Core Creator Guides with remaining deep reference guides
+const additionalGuides = [
   ...articlesGroup1,
   ...articlesGroup2,
   ...articlesGroup3
-].sort((a, b) => a.topicNumber - b.topicNumber);
+].filter(
+  (art) => !CORE_15_CREATOR_GUIDES.some((core) => core.slug === art.slug || core.title === art.title)
+);
+
+export const ALL_ARTICLES: Article[] = [
+  ...CORE_15_CREATOR_GUIDES,
+  ...additionalGuides
+];
+
+export { CORE_15_CREATOR_GUIDES };
 
 export const ARTICLE_CATEGORIES: string[] = [
   'All Guides',

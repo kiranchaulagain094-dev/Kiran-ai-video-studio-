@@ -48,7 +48,7 @@ const parsePath = (pathname: string): { route: string; slug?: string } => {
     return { route: 'articles' };
   }
   
-  if (clean.startsWith('articles/') || clean.startsWith('article/') || clean.startsWith('guides/')) {
+  if (clean.startsWith('articles/') || clean.startsWith('article/') || clean.startsWith('guides/') || clean.startsWith('creator-guides/')) {
     const parts = clean.split('/');
     if (parts.length > 1 && parts[1]) {
       return { route: 'article-detail', slug: parts[1] };
@@ -284,6 +284,9 @@ export default function App() {
               }}
               onSelectFeature={(featureRoute) => {
                 navigateTo(featureRoute);
+              }}
+              onSelectArticle={(slug) => {
+                navigateTo('article-detail', slug);
               }}
             />
           )}

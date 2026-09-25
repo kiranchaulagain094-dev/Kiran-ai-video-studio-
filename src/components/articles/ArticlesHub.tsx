@@ -16,8 +16,9 @@ import {
   ChevronRight,
   FolderGit2
 } from 'lucide-react';
-import { ALL_ARTICLES, ARTICLE_CATEGORIES, searchArticles } from '../../data/articles';
+import { ALL_ARTICLES, ARTICLE_CATEGORIES, searchArticles, CORE_15_CREATOR_GUIDES } from '../../data/articles';
 import { Article } from '../../types';
+import { AdSenseSafeContainer } from '../common/AdSenseSafeContainer';
 
 interface ArticlesHubProps {
   onSelectArticle: (slug: string) => void;
@@ -294,6 +295,9 @@ export const ArticlesHub: React.FC<ArticlesHubProps> = ({
           </button>
         </div>
       )}
+
+      {/* Editorial AdSense Container (Strictly safe for content page) */}
+      <AdSenseSafeContainer route="articles" hasSubstantialContent={true} />
 
       {/* AdSense & Transparency Safe Notice */}
       <div className="p-6 rounded-3xl bg-[#121622]/60 border border-white/5 text-xs text-slate-400 space-y-2">

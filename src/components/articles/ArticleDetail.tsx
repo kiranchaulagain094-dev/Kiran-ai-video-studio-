@@ -17,10 +17,12 @@ import {
   BookOpen,
   Compass,
   Lightbulb,
-  FileText
+  FileText,
+  ShieldCheck
 } from 'lucide-react';
 import { Article } from '../../types';
 import { getRelatedArticles, getPreviousAndNextArticles } from '../../data/articles';
+import { AdSenseSafeContainer } from '../common/AdSenseSafeContainer';
 
 interface ArticleDetailProps {
   article: Article;
@@ -482,6 +484,20 @@ export const ArticleDetail: React.FC<ArticleDetailProps> = ({
           </div>
         </section>
       )}
+
+      {/* Official YouTube Policy & Platform Updates Notice */}
+      <section className="p-5 rounded-2xl bg-white/[0.02] border border-white/5 space-y-2 text-xs text-slate-400">
+        <div className="flex items-center gap-2 text-slate-300 font-semibold">
+          <ShieldCheck className="w-4 h-4 text-emerald-400" />
+          <span>YouTube नीति तथा प्लेटफर्म नियमसम्बन्धी महत्त्वपूर्ण जानकारी:</span>
+        </div>
+        <p className="leading-relaxed">
+          YouTube का अल्गोरिदम, कम्युनिटी गाइडलाइन्स र फिचरहरू समयसँगै परिवर्तन हुन सक्छन्। यस निर्देशिकामा उल्लेख गरिएका सुझावहरू सामान्य सिर्जनात्मक अभ्यास र वर्तमान उत्तम अभ्यासमा आधारित छन्। आधिकारिक, अद्यावधिक र कानुनी नियमहरूका लागि सधैँ आधिकारिक <strong>YouTube Creator Studio</strong> र <strong>Google Policy</strong> कागजातहरू अध्ययन गर्न अनुरोध गरिन्छ।
+        </p>
+      </section>
+
+      {/* AdSense Safe Editorial Placement (Only active on approved content with substantial body) */}
+      <AdSenseSafeContainer route="article-detail" hasSubstantialContent={true} />
 
       {/* Section 7: Summary & Conclusion */}
       <section className="p-6 rounded-3xl bg-[#121622] border border-white/5 space-y-2">
