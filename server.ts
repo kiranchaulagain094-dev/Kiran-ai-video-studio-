@@ -1,4 +1,4 @@
-import app from './api/_app.ts';
+import { app } from './api/index';
 import express from 'express';
 import path from 'path';
 
