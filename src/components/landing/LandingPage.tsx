@@ -18,7 +18,8 @@ import {
   FileText,
   Mail,
   Play,
-  BookOpen
+  BookOpen,
+  Clock
 } from 'lucide-react';
 import { Footer } from '../common/Footer';
 import { CORE_15_CREATOR_GUIDES } from '../../data/creatorGuides';
@@ -68,6 +69,15 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       icon: Video,
       color: 'from-blue-600 to-indigo-600',
       badge: 'Screenwriting'
+    },
+    {
+      id: 'timeline-planner',
+      title: 'AI Video Timeline Planner',
+      subtitle: 'Google Flow Prompt & Screenshot Workflow',
+      description: 'Scene-by-scene 15s to 5m production timelines with copyable Google Flow prompts, exact duration math, and screenshot upload guides.',
+      icon: Clock,
+      color: 'from-cyan-600 to-indigo-600',
+      badge: 'Flow Ready'
     },
     {
       id: 'shorts-creator',

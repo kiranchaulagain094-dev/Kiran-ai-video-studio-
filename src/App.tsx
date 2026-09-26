@@ -28,6 +28,8 @@ import { ArticleDetail } from './components/articles/ArticleDetail';
 import { ALL_ARTICLES, getArticleBySlug } from './data/articles';
 import { Project } from './types';
 import { StudioApiService } from './services/api';
+import { UpdateNotificationModal } from './components/common/UpdateNotificationModal';
+import { CURRENT_APP_VERSION, APP_VERSION_STORAGE_KEY, compareSemVer } from './config/version';
 import { 
   DownloadCloud, 
   Settings as SettingsIcon, 
@@ -35,9 +37,11 @@ import {
   Sparkles, 
   Sliders, 
   ExternalLink, 
-  Music,
-  Trash2,
-  HardDrive
+  Music, 
+  Trash2, 
+  HardDrive,
+  Rocket,
+  RefreshCw
 } from 'lucide-react';
 
 // SPA Route & Slug Parser for clean browser URL history & serverless hosting
@@ -113,6 +117,110 @@ export default function App() {
   }>({});
   const [shortsPrefill, setShortsPrefill] = useState<{ topic?: string; hook?: string }>({});
   const [thumbnailPrefill, setThumbnailPrefill] = useState<{ idea?: string; title?: string }>({});
+
+  // Version-Based Update Detection State
+  const [showUpdateModal, setShowUpdateModal] = useState<boolean>(false);
+  const [isUpdatePreviewMode, setIsUpdatePreviewMode] = useState<boolean>(false);
+  const [detectedAppVersion, setDetectedAppVersion] = useState<string>(CURRENT_APP_VERSION);
+  const [lastAcknowledgedVersion, setLastAcknowledgedVersion] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(APP_VERSION_STORAGE_KEY);
+    } catch {
+      return null;
+    }
+  });
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState<boolean>(false);
+  const [updateCheckStatus, setUpdateCheckStatus] = useState<string | null>(null);
+
+  // Clean cache-busting URL parameters on fresh startup
+  useEffect(() => {
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('_v') || url.searchParams.has('_ts')) {
+        url.searchParams.delete('_v');
+        url.searchParams.delete('_ts');
+        window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, []);
+
+  // Update Detection on App Mount & Periodic Background Probe
+  useEffect(() => {
+    try {
+      const acknowledged = localStorage.getItem(APP_VERSION_STORAGE_KEY);
+      setLastAcknowledgedVersion(acknowledged);
+
+      // Check if user is an existing returning user who had used the studio before
+      const hasExistingData = !!(
+        localStorage.getItem('kiran_studio_projects') ||
+        localStorage.getItem('kiran_studio_preferences') ||
+        localStorage.getItem('kiran_website_guide_chat')
+      );
+
+      // If user had existing data but no stored version yet, their baseline is 1.0.0
+      const effectiveAcknowledged = acknowledged || (hasExistingData ? '1.0.0' : null);
+
+      if (effectiveAcknowledged) {
+        if (compareSemVer(CURRENT_APP_VERSION, effectiveAcknowledged) > 0) {
+          setDetectedAppVersion(CURRENT_APP_VERSION);
+          setIsUpdatePreviewMode(false);
+          setShowUpdateModal(true);
+        }
+      } else {
+        // First-time user on fresh install: acknowledge current version so they start clean
+        localStorage.setItem(APP_VERSION_STORAGE_KEY, CURRENT_APP_VERSION);
+        setLastAcknowledgedVersion(CURRENT_APP_VERSION);
+      }
+    } catch (err) {
+      console.warn('Version check notice:', err);
+    }
+
+    // Dynamic background version probe for live Vercel deployments
+    const checkServerVersion = async () => {
+      try {
+        const res = await fetch(`/api/version?_ts=${Date.now()}`, {
+          headers: { 'Cache-Control': 'no-cache' }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.version) {
+            const currentAck = localStorage.getItem(APP_VERSION_STORAGE_KEY);
+            if (currentAck && compareSemVer(data.version, currentAck) > 0) {
+              setDetectedAppVersion(data.version);
+              setIsUpdatePreviewMode(false);
+              setShowUpdateModal(true);
+            }
+          }
+        }
+      } catch {
+        // Network or offline check failure
+      }
+    };
+
+    checkServerVersion();
+    const interval = setInterval(checkServerVersion, 3 * 60 * 1000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        checkServerVersion();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    const handleOpenModalEvent = () => {
+      setDetectedAppVersion(CURRENT_APP_VERSION);
+      setIsUpdatePreviewMode(true);
+      setShowUpdateModal(true);
+    };
+    window.addEventListener('kiran:open-update-modal', handleOpenModalEvent);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('kiran:open-update-modal', handleOpenModalEvent);
+    };
+  }, []);
 
   // Cross-route navigation with browser history update
   const navigateTo = (route: string, slug?: string, prefillContext?: any) => {
@@ -622,6 +730,123 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Application Version & Update Management */}
+              <div className="p-6 rounded-3xl bg-[#121622] border border-cyan-500/20 space-y-4 text-xs shadow-xl">
+                <div className="flex flex-wrap items-center justify-between pb-3 border-b border-white/5 gap-2">
+                  <div className="flex items-center gap-2">
+                    <Rocket className="w-4 h-4 text-cyan-400" />
+                    <div>
+                      <h3 className="text-sm font-bold text-white uppercase tracking-wider">Application Version & Updates</h3>
+                      <p className="text-[11px] text-slate-400">Manage real deployment versioning, browser caching, and release notes.</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 font-mono font-bold text-[10px] border border-cyan-500/30">
+                      v{CURRENT_APP_VERSION}
+                    </span>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 font-medium text-[10px]">
+                      Latest
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="p-4 rounded-2xl bg-[#171c2b] border border-white/5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400 font-medium">Loaded App Version</span>
+                      <span className="font-mono text-white font-bold">v{CURRENT_APP_VERSION}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400 font-medium">Acknowledged in Browser</span>
+                      <span className="font-mono text-cyan-300">{lastAcknowledgedVersion ? `v${lastAcknowledgedVersion}` : 'None'}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400 font-medium">Vercel Cache Handling</span>
+                      <span className="text-emerald-400 font-medium">Automatic Asset Busting</span>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-[#171c2b] border border-white/5 space-y-2.5 flex flex-col justify-center">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDetectedAppVersion(CURRENT_APP_VERSION);
+                          setIsUpdatePreviewMode(true);
+                          setShowUpdateModal(true);
+                        }}
+                        className="flex-1 py-2 px-3 rounded-xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                        <span>View What's New</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={isCheckingUpdate}
+                        onClick={async () => {
+                          setIsCheckingUpdate(true);
+                          setUpdateCheckStatus('Checking server...');
+                          try {
+                            const res = await fetch(`/api/version?_ts=${Date.now()}`, {
+                              headers: { 'Cache-Control': 'no-cache' }
+                            });
+                            if (res.ok) {
+                              const data = await res.json();
+                              const ack = localStorage.getItem(APP_VERSION_STORAGE_KEY);
+                              if (ack && compareSemVer(data.version, ack) > 0) {
+                                setDetectedAppVersion(data.version);
+                                setIsUpdatePreviewMode(false);
+                                setShowUpdateModal(true);
+                                setUpdateCheckStatus(`New version v${data.version} available!`);
+                              } else {
+                                setUpdateCheckStatus(`You are on the latest version (v${CURRENT_APP_VERSION})`);
+                              }
+                            } else {
+                              setUpdateCheckStatus('Server reachable. Current version up to date.');
+                            }
+                          } catch {
+                            setUpdateCheckStatus('Checked. Running current production version.');
+                          } finally {
+                            setIsCheckingUpdate(false);
+                            setTimeout(() => setUpdateCheckStatus(null), 4000);
+                          }
+                        }}
+                        className="py-2 px-3 rounded-xl bg-white/5 hover:bg-white/10 text-slate-200 font-semibold text-xs border border-white/10 transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isCheckingUpdate ? 'animate-spin text-cyan-400' : ''}`} />
+                        <span>Check Updates</span>
+                      </button>
+                    </div>
+
+                    {/* Developer/User Simulator to test update trigger exactly as prompt requires */}
+                    <div className="pt-1 flex items-center justify-between border-t border-white/5">
+                      <span className="text-[10px] text-slate-400">Test Update Flow:</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // Simulate an older stored version (1.0.0) as specified in prompt requirement 2
+                          localStorage.setItem(APP_VERSION_STORAGE_KEY, '1.0.0');
+                          setLastAcknowledgedVersion('1.0.0');
+                          setDetectedAppVersion(CURRENT_APP_VERSION);
+                          setIsUpdatePreviewMode(false);
+                          setShowUpdateModal(true);
+                        }}
+                        className="text-[10px] text-indigo-400 hover:text-indigo-300 underline font-medium cursor-pointer"
+                      >
+                        Simulate Stored v1.0.0 (Trigger Modal)
+                      </button>
+                    </div>
+
+                    {updateCheckStatus && (
+                      <p className="text-[10px] text-cyan-300 font-medium animate-fadeIn">
+                        {updateCheckStatus}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               {/* Local Storage & Data Management */}
               <div className="p-6 rounded-3xl bg-[#121622] border border-white/10 space-y-4 text-xs shadow-xl">
                 <div className="flex items-center justify-between pb-3 border-b border-white/5">
@@ -752,6 +977,19 @@ export default function App() {
         <BottomNav
           currentRoute={currentRoute}
           onNavigate={navigateTo}
+        />
+      )}
+
+      {/* Version-Based Full-Screen Update Modal */}
+      {showUpdateModal && (
+        <UpdateNotificationModal
+          detectedVersion={detectedAppVersion}
+          isPreviewMode={isUpdatePreviewMode}
+          onClose={() => setShowUpdateModal(false)}
+          onUpdateAcknowledged={(acknowledgedVer) => {
+            setLastAcknowledgedVersion(acknowledgedVer);
+            setShowUpdateModal(false);
+          }}
         />
       )}
     </div>

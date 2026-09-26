@@ -309,6 +309,7 @@ export class StudioApiService {
   static async generateOneMinuteTimeline(params: {
     topic: string;
     script?: string;
+    durationOption?: string;
     videoStyle?: string;
     language?: string;
     visualStyle?: string;
@@ -346,5 +347,20 @@ export class StudioApiService {
       throw new Error(errorMsg);
     }
     return await res.json();
+  }
+
+  static async checkAppVersion(): Promise<{ version: string; releaseDate: string; changelog: any } | null> {
+    try {
+      const res = await fetch('/api/version?_t=' + Date.now(), {
+        cache: 'no-store',
+        headers: { 'Accept': 'application/json' }
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (e) {
+      console.warn('Version check network notice:', e);
+    }
+    return null;
   }
 }

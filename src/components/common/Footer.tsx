@@ -17,6 +17,7 @@ import {
   Image as ImageIcon,
   Compass
 } from 'lucide-react';
+import { CURRENT_APP_VERSION } from '../../config/version';
 
 interface FooterProps {
   onNavigate: (route: string) => void;
@@ -335,6 +336,16 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate, currentRoute, classN
             <span className="text-slate-400">© 2026 Kiran AI Video Studio. All rights reserved.</span>
             <span className="hidden sm:inline text-slate-600">•</span>
             <span className="text-slate-400 text-[11px]">Open Access Creator Mode</span>
+            <span className="hidden sm:inline text-slate-600">•</span>
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent('kiran:open-update-modal'))}
+              title="Click to view What's New & Release Changelog"
+              className="px-2 py-0.5 rounded bg-white/5 hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300 font-mono text-[10px] font-semibold border border-white/5 hover:border-cyan-500/20 transition-colors cursor-pointer flex items-center gap-1"
+            >
+              <span>v{CURRENT_APP_VERSION}</span>
+              <span className="text-[9px] text-slate-500">What's New</span>
+            </button>
           </div>
 
           {/* Direct Visible Legal Links Row */}

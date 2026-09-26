@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 dotenv.config({ override: true });
 
 import { GoogleGenAI } from '@google/genai';
+import { CURRENT_APP_VERSION, APP_CHANGELOGS } from '../src/config/version';
 
 
 export interface VideoJob {
@@ -411,6 +412,7 @@ apiRouter.get(['/', '/health', '/api/health', '/status'], (req, res) => {
   res.json({
     status: 'ok',
     appName: 'Kiran AI Video Studio',
+    version: CURRENT_APP_VERSION,
     operator: 'Kiran Chaulagain',
     contactEmail: 'kiranchaulagain094@gmail.com',
     features: {
@@ -425,6 +427,16 @@ apiRouter.get(['/', '/health', '/api/health', '/status'], (req, res) => {
       musicVideoPlanner: true,
       timelinePlanner: true
     }
+  });
+});
+
+// Centralized Version and Changelog Probe
+apiRouter.get(['/version', '/api/version', '/app-version', '/api/app-version'], (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.json({
+    version: CURRENT_APP_VERSION,
+    releaseDate: 'September 2026',
+    changelog: APP_CHANGELOGS[CURRENT_APP_VERSION] || null
   });
 });
 
@@ -1411,9 +1423,11 @@ Respond ONLY with valid JSON:
   }
 });
 
-// Helper to guarantee mathematically exact 60-second timeline (00:00 to 01:00)
-function normalizeTimelineScenes(scenes: any[]): any[] {
+// Helper to guarantee mathematically exact timeline according to target duration (15s, 30s, 60s, 120s, etc.)
+function normalizeTimelineScenes(scenes: any[], targetTotalSeconds: number = 60): any[] {
   if (!Array.isArray(scenes) || scenes.length === 0) return [];
+
+  const targetSec = Math.max(10, Math.round(targetTotalSeconds || 60));
 
   const formatTime = (secs: number) => {
     const m = Math.floor(secs / 60);
@@ -1422,20 +1436,20 @@ function normalizeTimelineScenes(scenes: any[]): any[] {
   };
 
   // 1. Ensure durationSeconds is positive integer
-  let rawDurations = scenes.map(s => Math.max(2, Math.round(Number(s.durationSeconds) || 8)));
+  let rawDurations = scenes.map(s => Math.max(2, Math.round(Number(s.durationSeconds) || 5)));
   let sum = rawDurations.reduce((a, b) => a + b, 0);
 
-  // If sum !== 60, adjust the largest duration or adjust diff
-  if (sum !== 60) {
-    const diff = 60 - sum;
+  // If sum !== targetSec, adjust the largest duration or distribute diff
+  if (sum !== targetSec) {
+    const diff = targetSec - sum;
     let maxIdx = 0;
     for (let i = 1; i < rawDurations.length; i++) {
       if (rawDurations[i] > rawDurations[maxIdx]) maxIdx = i;
     }
-    rawDurations[maxIdx] = Math.max(3, rawDurations[maxIdx] + diff);
+    rawDurations[maxIdx] = Math.max(2, rawDurations[maxIdx] + diff);
     sum = rawDurations.reduce((a, b) => a + b, 0);
-    if (sum !== 60) {
-      rawDurations[rawDurations.length - 1] += (60 - sum);
+    if (sum !== targetSec) {
+      rawDurations[rawDurations.length - 1] += (targetSec - sum);
     }
   }
 
@@ -1445,6 +1459,16 @@ function normalizeTimelineScenes(scenes: any[]): any[] {
     const start = currentStart;
     const end = start + duration;
     currentStart = end;
+
+    // Provide default reference guide if missing
+    let refGuide = (s.referenceGuide || '').trim();
+    if (!refGuide) {
+      if (s.visual && (s.visual.toLowerCase().includes('kiran') || s.visual.toLowerCase().includes('ui') || s.visual.toLowerCase().includes('screen'))) {
+        refGuide = 'Upload a screenshot of the Kiran AI Video Studio interface showing the relevant workspace.';
+      } else {
+        refGuide = `Upload a high-resolution reference image or screenshot illustrating the primary subject for Scene ${idx + 1}.`;
+      }
+    }
 
     return {
       id: s.id || `scene-${idx + 1}`,
@@ -1456,15 +1480,16 @@ function normalizeTimelineScenes(scenes: any[]): any[] {
       voiceover: s.voiceover || '',
       visual: s.visual || '',
       onScreenText: s.onScreenText || '',
-      flowPrompt: s.flowPrompt || ''
+      flowPrompt: s.flowPrompt || '',
+      referenceGuide: refGuide
     };
   });
 }
 
-// 11. 1-Minute AI Video Timeline Planner (Exact 60 Seconds with Google Flow Prompts)
+// 11. AI Video Timeline Planner with Screenshot + Google Flow Prompt Workflow
 apiRouter.post(['/ai/timeline-planner', '/api/ai/timeline-planner'], async (req, res) => {
   try {
-    const { topic, script, videoStyle, language, visualStyle, aspectRatio } = req.body;
+    const { topic, script, durationOption, videoStyle, language, visualStyle, aspectRatio } = req.body;
     if (!topic || typeof topic !== 'string' || topic.trim() === '') {
       return res.status(400).json({ success: false, error: 'Video topic or idea is required.' });
     }
@@ -1477,58 +1502,112 @@ apiRouter.post(['/ai/timeline-planner', '/api/ai/timeline-planner'], async (req,
       });
     }
 
+    // Map duration options to exact target seconds
+    const durationSecondsMap: Record<string, number> = {
+      '15 SEC': 15,
+      '30 SEC': 30,
+      '1 MIN': 60,
+      '2 MIN': 120,
+      '3 MIN': 180,
+      '4 MIN': 240,
+      '5 MIN': 300
+    };
+
+    const chosenDurationOption = (durationOption || '1 MIN').trim().toUpperCase();
+    const targetSeconds = durationSecondsMap[chosenDurationOption] || 60;
+    
+    // Format duration string (e.g. "01:00", "00:30", "02:00")
+    const targetMinutes = Math.floor(targetSeconds / 60);
+    const targetRemSec = targetSeconds % 60;
+    const formattedTotalDuration = `${String(targetMinutes).padStart(2, '0')}:${String(targetRemSec).padStart(2, '0')}`;
+
     const chosenStyle = (videoStyle || 'Cinematic').trim();
     const chosenLang = (language || 'English').trim();
     const chosenVisual = (visualStyle || 'Photorealistic Cinematic').trim();
     const chosenAr = (aspectRatio || '16:9').trim();
 
-    const prompt = `You are a world-class AI Video Director & Prompt Engineer for Kiran AI Video Studio.
-Generate an EXACT 60-SECOND SCENE-BY-SCENE PRODUCTION TIMELINE tailored directly for Google Flow and modern generative AI video tools.
+    // Check for website / app demo context (Kiran AI Video Studio demo)
+    const isStudioDemo = topic.toLowerCase().includes('kiran') || 
+      topic.toLowerCase().includes('studio') || 
+      topic.toLowerCase().includes('website demo') ||
+      topic.toLowerCase().includes('app demo');
+
+    const studioDemoInstruction = isStudioDemo ? `
+SPECIAL INSTRUCTION FOR KIRAN AI VIDEO STUDIO / UI DEMONSTRATION CONTENT:
+The user is showcasing Kiran AI Video Studio. For all UI and interface demonstration scenes:
+Instruct the Google Flow prompt to preserve the uploaded interface screenshot accurately.
+Use wording similar to: "Use the uploaded Kiran AI Video Studio interface screenshot as the exact visual reference. Preserve the visible UI structure, branding, typography, colors and layout. Do not redesign or replace the interface. Add only natural cinematic camera movement and subtle visual emphasis."
+Do NOT invent fake UI elements.
+` : '';
+
+    const prompt = `You are a world-class commercial AI Video Director & Prompt Engineer for Kiran AI Video Studio.
+Generate an EXACT ${targetSeconds}-SECOND SCENE-BY-SCENE PRODUCTION TIMELINE (${formattedTotalDuration} total) tailored directly for Google Flow and modern generative AI video tools.
 
 INPUT DETAILS:
 - Topic / Idea: "${topic}"
-- User Full Script (Optional): ${script && script.trim() ? `"${script.trim()}"` : 'None provided. Generate an intelligent, highly engaging 60-second voiceover script.'}
+- Target Duration: ${chosenDurationOption} (${targetSeconds} seconds total)
+- User Full Script (Optional): ${script && script.trim() ? `"${script.trim()}"` : 'None provided. Intelligently craft an engaging voiceover script sized to fit ' + targetSeconds + ' seconds.'}
 - Video Style: "${chosenStyle}"
 - Target Language: "${chosenLang}"
 - Visual Style: "${chosenVisual}"
 - Target Aspect Ratio: "${chosenAr}"
+${studioDemoInstruction}
 
 CRITICAL PRODUCTION SPECIFICATIONS:
-1. EXACT 60 SECONDS TOTAL DURATION (00:00 to 01:00):
-   - Intelligently divide the video into 4 to 8 scenes (e.g. 5, 6, or 7 scenes). Do not force an arbitrary fixed scene count.
-   - Assign integer seconds to each scene (durationSeconds >= 3). The sum of all scene durations MUST equal exactly 60 seconds.
-   - Format each scene's timeRange consecutively: e.g. "00:00–00:08", "00:08–00:18", etc. ending precisely at 01:00.
+1. EXACT ${targetSeconds} SECONDS TOTAL DURATION (00:00 to ${formattedTotalDuration}):
+   - Intelligently divide the video into an appropriate number of scenes:
+     * 15 SEC: 2 to 3 scenes
+     * 30 SEC: 3 to 5 scenes
+     * 1 MIN: 5 to 7 scenes
+     * 2 MIN: 7 to 10 scenes
+     * 3 MIN: 9 to 14 scenes
+     * 4 MIN: 11 to 17 scenes
+     * 5 MIN: 13 to 20 scenes
+   - Assign integer seconds to each scene (durationSeconds >= 2).
+   - The sum of all scene durations MUST equal EXACTLY ${targetSeconds} seconds!
+   - Consecutive time ranges: e.g. "00:00–00:08", "00:08–00:18", ending precisely at ${formattedTotalDuration}.
 
-2. STORYTELLING STRUCTURE FOR "${chosenStyle}":
-   - YouTube Explainer: Hook -> Problem -> Step 1 / Concept -> Step 2 / Deep Dive -> Result -> CTA
-   - Product / Tech Promo: Hook -> Pain Point -> Product Intro -> Features Demo -> Key Benefit -> CTA
-   - Music Video: Atmospheric Intro -> Performance / Verse -> Story Development -> Chorus Climax -> Lingering Outro
-   - Cinematic / Documentary: Cinematic Hook -> Context & Setting -> Main Development -> Emotional Climax -> Payoff & Reflection
-   - Social Media / Reel: 3-Second Hook -> High Pacing Story -> Visual Twist -> Value Delivery -> Follow CTA
+2. SMART STORYTELLING STRUCTURE FOR "${chosenStyle}":
+   - Tutorial / Explainer: Hook -> Problem -> Step 1 -> Step 2 -> Result -> CTA
+   - Product / Tech Promo: Hook -> Problem -> Product Intro -> Features Demo -> Key Benefit -> CTA
+   - Music Video: Atmosphere Intro -> Verse / Performance -> Narrative Development -> Chorus Climax -> Ending
+   - Short-Form / Social: 3-Second Hook -> Context -> Main Point -> Payoff -> CTA
+   - Documentary: Hook -> Context -> Development -> Key Moment -> Conclusion
+   - Cinematic Story: Cinematic Hook -> Setting -> Main Development -> Climax -> Resolution
 
 3. GOOGLE FLOW PROMPT PER SCENE:
    For EACH scene, construct a standalone, high-fidelity Google Flow prompt describing:
-   - Main subject & specific physical action
+   - Subject & specific physical action
    - Environment / setting with background texture
-   - Character appearance (maintain strict character consistency across scenes, including clothing, hair, facial features)
-   - Camera movement (e.g., slow forward dolly, smooth orbit, tracking shot, low-angle push-in, static wide)
-   - Camera angle (e.g., eye-level, low angle, overhead macro, extreme close-up)
-   - Lighting (e.g., golden hour rim light, soft volumetric studio illumination, moody neon backlight)
-   - Mood & color palette (e.g., warm cinematic amber, sleek futuristic teal, crisp 4K documentary)
-   - Visual style: ${chosenVisual}, cinematic lighting, photorealistic textures, clean bokeh, 4K resolution
-   - Continuity reference to previous/next scene
+   - Character appearance & clothing (strict continuity across scenes for recurring subjects)
+   - Camera movement (e.g. slow forward dolly, subtle pan, smooth orbit, tracking shot, low-angle push-in)
+   - Camera angle (e.g. eye-level, low angle, overhead macro, extreme close-up)
+   - Lighting (e.g. golden hour rim light, soft volumetric studio illumination, moody neon backlight)
+   - Mood & color direction
+   - Cinematic details: ${chosenVisual}, controlled depth of field, realistic textures, smooth motion, professional composition
    - Aspect ratio parameter: --ar ${chosenAr}
+   - Duration parameter: --duration ${targetSeconds <= 30 ? '5s' : '8s'}
+   - DO NOT write vague prompts like "Make a cool AI video". Write production-ready director prompts.
 
-4. MULTILINGUAL INSTRUCTIONS:
-   - The user may write in English, Nepali (Devanagari or Romanized like "Ma YouTube ko lagi video banauna chahanchu"), Hindi, or mixed. Understand the semantic intent deeply.
-   - VOICEOVER / SCRIPT and ON-SCREEN TEXT MUST be written in the user's requested language ("${chosenLang}").
-   - GOOGLE FLOW PROMPT MUST be written in rich, descriptive English for optimal video AI synthesis.
+4. REFERENCE / SCREENSHOT GUIDE PER SCENE:
+   For EVERY scene, generate a specific "referenceGuide" explaining what screenshot, image, or reference should be uploaded to Google Flow:
+   - For website tutorials: "Upload a screenshot of the Kiran AI Video Studio Home page."
+   - For tool demonstrations: "Upload the AI Video Timeline Planner screenshot showing the generated scene card."
+   - For product demos: "Upload the relevant product/interface screenshot."
+   - For cinematic scenes: "Upload a suitable reference image or generated visual reference."
+   - Do NOT pretend a screenshot exists if the user has not provided one.
+
+5. MULTILINGUAL REQUIREMENTS:
+   - Support English, Nepali (Devanagari or Romanized like "Ma YouTube ko lagi video banauna chahanchu"), Hindi, or mixed input. Understand semantic intent.
+   - VOICEOVER / SCRIPT and ON-SCREEN TEXT MUST be in the requested language ("${chosenLang}").
+   - GOOGLE FLOW PROMPT MUST be in rich, descriptive English for optimal AI video synthesis.
 
 OUTPUT JSON FORMAT (Return ONLY raw valid JSON, no markdown outside JSON):
 {
   "title": "Engaging Video Title",
-  "totalDuration": "01:00",
-  "totalDurationSeconds": 60,
+  "totalDuration": "${formattedTotalDuration}",
+  "totalDurationSeconds": ${targetSeconds},
+  "durationOption": "${chosenDurationOption}",
   "aspectRatio": "${chosenAr}",
   "videoStyle": "${chosenStyle}",
   "visualStyle": "${chosenVisual}",
@@ -1543,14 +1622,15 @@ OUTPUT JSON FORMAT (Return ONLY raw valid JSON, no markdown outside JSON):
       "endSeconds": 8,
       "durationSeconds": 8,
       "voiceover": "Voiceover line timed accurately for this scene duration...",
-      "visual": "Director's cinematic visual description of what happens on screen...",
-      "onScreenText": "On-screen text or headline graphic...",
-      "flowPrompt": "Google Flow ready prompt with subject, environment, lighting, camera movement, and --ar ${chosenAr}"
+      "visual": "Director's cinematic visual description of what appears in the video...",
+      "onScreenText": "Exact on-screen text...",
+      "flowPrompt": "Professional Google Flow prompt with subject, camera, lighting, style, --ar ${chosenAr}",
+      "referenceGuide": "Specific instructions on what screenshot, image, or reference should be uploaded to Google Flow"
     }
   ],
   "fullCombinedScript": "Full spoken voiceover script combining all scenes...",
-  "musicSoundDirection": "Detailed music tempo, rhythm, instruments, and audio sound effects cues...",
-  "transitionStyle": "Cinematic match cuts, whip pans, and seamless visual transitions...",
+  "musicSoundDirection": "Detailed music tempo, rhythm, instruments, and sound effects cues...",
+  "transitionStyle": "Cinematic match cuts, motion blur pans, and seamless visual transitions...",
   "finalCta": "Clear call to action for the end screen...",
   "continuityNotes": "Character wardrobe, recurring lighting cues, and visual subject consistency details."
 }`;
@@ -1563,7 +1643,7 @@ OUTPUT JSON FORMAT (Return ONLY raw valid JSON, no markdown outside JSON):
     }
 
     const rawScenes = Array.isArray(parsed.scenes) ? parsed.scenes : [];
-    const normalizedScenes = normalizeTimelineScenes(rawScenes);
+    const normalizedScenes = normalizeTimelineScenes(rawScenes, targetSeconds);
 
     const fullScript = parsed.fullCombinedScript || 
       normalizedScenes.map(s => s.voiceover).filter(Boolean).join(' ');
@@ -1571,8 +1651,9 @@ OUTPUT JSON FORMAT (Return ONLY raw valid JSON, no markdown outside JSON):
     const finalResult = {
       success: true,
       title: parsed.title || topic,
-      totalDuration: '01:00',
-      totalDurationSeconds: 60,
+      totalDuration: formattedTotalDuration,
+      totalDurationSeconds: targetSeconds,
+      durationOption: chosenDurationOption,
       aspectRatio: chosenAr,
       videoStyle: chosenStyle,
       visualStyle: chosenVisual,
@@ -1589,10 +1670,10 @@ OUTPUT JSON FORMAT (Return ONLY raw valid JSON, no markdown outside JSON):
 
     res.json(finalResult);
   } catch (err: any) {
-    console.error('1-Minute Timeline Planner error:', err);
+    console.error('Timeline Planner error:', err);
     res.status(500).json({
       success: false,
-      error: err?.message || 'Failed to generate 1-minute video timeline. Please try again.'
+      error: err?.message || 'Timeline generation failed. Please check your connection and try again.'
     });
   }
 });
@@ -1636,9 +1717,10 @@ CONTEXT & CONTINUITY:
 Return ONLY valid JSON:
 {
   "voiceover": "Updated spoken voiceover script in ${language || 'English'}...",
-  "visual": "Updated cinematic visual description...",
+  "visual": "Updated detailed visual description...",
   "onScreenText": "Updated on-screen text...",
-  "flowPrompt": "Updated high-quality Google Flow prompt with subject, camera, lighting, style, and --ar ${aspectRatio || '16:9'}"
+  "flowPrompt": "Updated high-quality Google Flow prompt with subject, camera, lighting, style, and --ar ${aspectRatio || '16:9'}",
+  "referenceGuide": "Updated reference/screenshot guide explaining what screenshot or image to upload to Google Flow"
 }`;
 
     const rawResponse = await generateGeminiContentWithFallback(ai, prompt);
@@ -1653,7 +1735,8 @@ Return ONLY valid JSON:
       voiceover: parsed.voiceover || scene.voiceover,
       visual: parsed.visual || scene.visual,
       onScreenText: parsed.onScreenText || scene.onScreenText,
-      flowPrompt: parsed.flowPrompt || scene.flowPrompt
+      flowPrompt: parsed.flowPrompt || scene.flowPrompt,
+      referenceGuide: parsed.referenceGuide || scene.referenceGuide || 'Upload reference screenshot or image to Google Flow.'
     };
 
     res.json({ success: true, scene: updatedScene });

@@ -24,6 +24,17 @@ export const CURRENT_STUDIO_TOOLS: StudioTool[] = [
     keywords: ['video', 'script', 'screenplay', 'scene', 'camera', 'voiceover', 'youtube video', 'documentary', 'tourism', 'vlog', 'story', 'visual prompt', 'film', 'shot', 'long form', 'katha', 'video banaune']
   },
   {
+    id: 'timeline-planner',
+    name: 'AI Video Timeline Planner',
+    badge: 'Flow Ready',
+    route: 'timeline-planner',
+    shortDescription: 'Scene-by-scene video timeline planner (15s to 5m) with copyable Google Flow prompts, exact duration math, and screenshot upload guides.',
+    detailedPurpose: 'Generates structured video production timelines with exact time brackets, voiceover lines, on-screen text, screenshot/reference upload guides, and production prompts for Google Flow.',
+    howToUse: 'Enter video idea or script, select duration (15s, 30s, 1m, 2m, 3m, 4m, 5m), style, and language, then click Generate Timeline. Use Screenshot Mode or copy prompts directly into Google Flow.',
+    expectedResult: 'Exact-duration scene cards with copyable Flow prompts, screenshot reference guides, in-place editing, and 📸 Screenshot Mode.',
+    keywords: ['flow', 'google flow', 'timeline', 'scene by scene', '1-min', '1 minute', 'screenshot mode', 'reference guide', 'flow prompt', 'video timeline', 'production plan', 'scene cards']
+  },
+  {
     id: 'shorts-creator',
     name: 'Shorts & Reels Creator',
     badge: '9:16 Vertical',

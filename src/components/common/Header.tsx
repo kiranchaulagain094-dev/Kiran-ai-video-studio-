@@ -11,6 +11,7 @@ import {
   Info,
   Mail
 } from 'lucide-react';
+import { CURRENT_APP_VERSION } from '../../config/version';
 
 interface HeaderProps {
   onNavigate: (route: string) => void;
@@ -91,30 +92,45 @@ export const Header: React.FC<HeaderProps> = ({
             {isSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </button>
 
-          <button
-            id="header-brand-logo-btn"
-            onClick={() => onNavigate('landing')}
-            className="flex items-center gap-2.5 text-left group focus:outline-none"
-          >
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 via-violet-600 to-cyan-500 p-0.5 shadow-lg shadow-indigo-600/20 group-hover:scale-105 transition-transform">
-              <div className="w-full h-full bg-[#0a0c12] rounded-[10px] flex items-center justify-center">
-                <Sparkles className="w-4 h-4 text-cyan-400" />
+          <div className="flex items-center gap-2">
+            <button
+              id="header-brand-logo-btn"
+              onClick={() => onNavigate('landing')}
+              className="flex items-center gap-2.5 text-left group focus:outline-none cursor-pointer"
+            >
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 via-violet-600 to-cyan-500 p-0.5 shadow-lg shadow-indigo-600/20 group-hover:scale-105 transition-transform">
+                <div className="w-full h-full bg-[#0a0c12] rounded-[10px] flex items-center justify-center">
+                  <Sparkles className="w-4 h-4 text-cyan-400" />
+                </div>
               </div>
-            </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-sm sm:text-base font-extrabold text-white tracking-tight">
-                  Kiran AI Studio
-                </span>
-                <span className="hidden sm:inline-block text-[10px] font-bold px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase tracking-wider">
-                  Free Tools
-                </span>
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-sm sm:text-base font-extrabold text-white tracking-tight">
+                    Kiran AI Studio
+                  </span>
+                  <span className="hidden sm:inline-block text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase tracking-wider">
+                    Free Tools
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-400 hidden sm:block leading-none">
+                  Screenplay, Shorts & YouTube SEO
+                </p>
               </div>
-              <p className="text-[10px] text-slate-400 hidden sm:block leading-none">
-                Screenplay, Shorts & YouTube SEO
-              </p>
-            </div>
-          </button>
+            </button>
+
+            {/* Clickable Version Changelog Badge */}
+            <button
+              type="button"
+              id="header-version-pill-btn"
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('kiran:open-update-modal'));
+              }}
+              title="View What's New & Release Notes"
+              className="hidden md:inline-flex items-center gap-1 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/25 hover:bg-cyan-500/25 transition-colors cursor-pointer ml-1"
+            >
+              <span>v{CURRENT_APP_VERSION}</span>
+            </button>
+          </div>
         </div>
 
         {/* Center: Desktop Nav Links */}

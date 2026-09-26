@@ -279,13 +279,15 @@ export interface OneMinuteTimelineScene {
   voiceover: string;
   visual: string;
   onScreenText: string;
-  flowPrompt: string; // Google Flow ready prompt
+  flowPrompt: string; // Google Flow ready production prompt
+  referenceGuide?: string; // Reference / Screenshot guide for Google Flow upload
 }
 
 export interface OneMinuteTimelinePlan {
   title: string;
-  totalDuration: string; // "01:00"
-  totalDurationSeconds: number; // 60
+  totalDuration: string; // "01:00", "00:30", "02:00", etc.
+  totalDurationSeconds: number; // 15, 30, 60, 120, 180, 240, 300
+  durationOption?: string; // '15 SEC' | '30 SEC' | '1 MIN' | '2 MIN' | '3 MIN' | '4 MIN' | '5 MIN'
   aspectRatio: '16:9' | '9:16' | '1:1';
   videoStyle: string;
   visualStyle: string;
