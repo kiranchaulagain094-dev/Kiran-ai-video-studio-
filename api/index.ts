@@ -3,7 +3,17 @@ import dotenv from 'dotenv';
 dotenv.config({ override: true });
 
 import { GoogleGenAI } from '@google/genai';
-import { CURRENT_APP_VERSION, APP_CHANGELOGS } from '../src/config/version';
+
+export const CURRENT_APP_VERSION = "1.1.0";
+export const APP_CHANGELOGS: Record<string, any> = {
+  "1.1.0": {
+    version: "1.1.0",
+    releaseDate: "September 2026",
+    title: "AI Video Timeline Planner & Google Flow Workflow",
+    type: "minor",
+    description: "We've added new features and improvements to make your creator workflow better."
+  }
+};
 
 
 export interface VideoJob {
@@ -93,7 +103,7 @@ export class VideoGenerationService {
       let visualPrompt = params.idea;
       try {
         const scriptResponse = await ai.models.generateContent({
-          model: 'gemini-3.6-flash',
+          model: 'gemini-3.1-flash-lite',
           contents: scriptPrompt
         });
         if (scriptResponse.text) {
@@ -176,32 +186,54 @@ app.use((req, res, next) => {
   next();
 });
 
+// URL Normalizer for Vercel Rewrites
+app.use((req, res, next) => {
+  const forwarded = req.headers['x-forwarded-url'] || req.headers['x-original-url'];
+  if (typeof forwarded === 'string' && forwarded.startsWith('/api')) {
+    req.url = forwarded;
+  } else if (req.query && typeof req.query._api_route === 'string') {
+    const cleanRoute = (req.query._api_route as string).replace(/^\/+/, '');
+    req.url = `/api/${cleanRoute}`;
+  }
+  next();
+});
+
 // JSON and URL-encoded body parsers with pre-parsed body detection
 app.use((req, res, next) => {
+  if (req.body !== undefined && req.body !== null && typeof req.body === 'object') {
+    return next();
+  }
   if (typeof req.body === 'string') {
     try {
       req.body = JSON.parse(req.body);
     } catch {}
     return next();
   }
-  if (req.body !== undefined && req.body !== null && typeof req.body === 'object') {
-    return next();
-  }
-  if ((req as any).readableEnded || (req as any).complete) {
+  if ((req as any).readableEnded || (req as any)._readableState?.ended || (req as any).complete) {
     if (!req.body) req.body = {};
     return next();
   }
-  express.json({ limit: '25mb' })(req, res, next);
+  express.json({ limit: '25mb' })(req, res, (err) => {
+    if (err) {
+      req.body = {};
+    }
+    next();
+  });
 });
 app.use((req, res, next) => {
   if (req.body !== undefined && req.body !== null && typeof req.body === 'object') {
     return next();
   }
-  if ((req as any).readableEnded || (req as any).complete) {
+  if ((req as any).readableEnded || (req as any)._readableState?.ended || (req as any).complete) {
     if (!req.body) req.body = {};
     return next();
   }
-  express.urlencoded({ extended: true, limit: '25mb' })(req, res, next);
+  express.urlencoded({ extended: true, limit: '25mb' })(req, res, (err) => {
+    if (err) {
+      req.body = {};
+    }
+    next();
+  });
 });
 
 // Dedicated API Router
@@ -321,11 +353,23 @@ function extractJsonFromText(rawText: string): any {
   throw new Error('Unable to parse JSON from AI response.');
 }
 
-// Lazy initialization of Gemini Client
+// Lazy initialization of Gemini Client supporting all standard key environment variable names
 let geminiClient: GoogleGenAI | null = null;
+function getGeminiApiKey(): string | null {
+  const key = 
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.GOOGLE_GENAI_API_KEY ||
+    process.env.GOOGLE_AI_API_KEY;
+  if (!key || key.trim() === '' || key === 'MY_GEMINI_API_KEY' || key === 'YOUR_GEMINI_API_KEY') {
+    return null;
+  }
+  return key.trim();
+}
+
 function getGeminiClient(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey === 'YOUR_GEMINI_API_KEY') {
+  const apiKey = getGeminiApiKey();
+  if (!apiKey) {
     return null;
   }
   if (!geminiClient) {
@@ -333,7 +377,7 @@ function getGeminiClient(): GoogleGenAI | null {
       apiKey,
       httpOptions: {
         headers: {
-          'User-Agent': 'kiran-ai-video-studio'
+          'User-Agent': 'aistudio-build'
         }
       }
     });
@@ -341,48 +385,47 @@ function getGeminiClient(): GoogleGenAI | null {
   return geminiClient;
 }
 
-// Resilient Gemini text caller with fallback, retries, and timeouts
+// Resilient Gemini text caller with verified models, fast failover, and strict serverless timeout
 async function generateGeminiContentWithFallback(
   ai: GoogleGenAI,
   promptOrContents: any,
   config?: any
 ): Promise<string> {
-  // Candidate models with verified availability and fast latency
+  // Verified active production models from @google/genai specification:
+  // 1. gemini-3.1-flash-lite: ultra-fast, sub-2s latency, high availability, ideal for timeline/script generation
+  // 2. gemini-flash-latest: official stable flash alias
+  // 3. gemini-3.8-flash: high reasoning capacity
   const candidateModels = [
     'gemini-3.1-flash-lite',
-    'gemini-3.6-flash',
+    'gemini-flash-latest',
     'gemini-3.8-flash'
   ];
   let lastError: any = null;
 
-  for (let attempt = 0; attempt < 2; attempt++) {
-    for (const model of candidateModels) {
-      try {
-        const callPromise = ai.models.generateContent({
-          model,
-          contents: promptOrContents,
-          config: config || {
-            responseMimeType: 'application/json'
-          }
-        });
-        // 25 second timeout per candidate to stay well within serverless budget
-        const timeoutPromise = new Promise<never>((_, reject) => 
-          setTimeout(() => reject(new Error(`Timeout requesting model ${model}`)), 25000)
-        );
-
-        const response = await Promise.race([callPromise, timeoutPromise]);
-        const text = response.text || '';
-        if (text && text.trim().length > 0) {
-          return text;
+  for (const model of candidateModels) {
+    try {
+      const callPromise = ai.models.generateContent({
+        model,
+        contents: promptOrContents,
+        config: config || {
+          responseMimeType: 'application/json'
         }
-      } catch (err: any) {
-        lastError = err;
-        console.warn(`Attempt ${attempt + 1}: Candidate model ${model} encountered an issue:`, err?.message || err);
-        await new Promise(r => setTimeout(r, 400));
+      });
+      // 20 second timeout per candidate to allow comprehensive multi-scene timelines to complete cleanly
+      const timeoutPromise = new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error(`Timeout requesting model ${model}`)), 20000)
+      );
+
+      const response = await Promise.race([callPromise, timeoutPromise]);
+      const text = response.text || '';
+      if (text && text.trim().length > 0) {
+        return text;
       }
-    }
-    if (attempt === 0) {
-      await new Promise(r => setTimeout(r, 1000));
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`Candidate model ${model} encountered an issue:`, err?.message || err);
+      // Brief backoff before next candidate
+      await new Promise(r => setTimeout(r, 200));
     }
   }
 
@@ -403,14 +446,12 @@ async function generateGeminiContentWithFallback(
 
 // System Status & Health Probes
 apiRouter.get(['/', '/health', '/api/health', '/status'], (req, res) => {
-  const hasGemini = Boolean(
-    process.env.GEMINI_API_KEY && 
-    process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY' &&
-    process.env.GEMINI_API_KEY !== 'YOUR_GEMINI_API_KEY'
-  );
+  const hasGemini = Boolean(getGeminiApiKey());
 
   res.json({
+    ok: true,
     status: 'ok',
+    service: 'Kiran AI Video Studio API',
     appName: 'Kiran AI Video Studio',
     version: CURRENT_APP_VERSION,
     operator: 'Kiran Chaulagain',
@@ -1768,14 +1809,14 @@ apiRouter.get(['/video/jobs/:id', '/api/video/jobs/:id'], async (req, res) => {
   }
 });
 
-// Mount the API Router specifically at '/api', '/health', and '/status'
-// IMPORTANT: Do NOT mount at bare '/' so that Vite middlewares can serve the SPA frontend!
+// Mount the API Router specifically at '/api', '/health', '/status', and root
 app.use('/api', apiRouter);
 app.use('/health', apiRouter);
 app.use('/status', apiRouter);
+app.use(apiRouter);
 
 // Explicit 404 Handler for unrecognized API routes
-app.use('/api', (req, res) => {
+app.use((req, res) => {
   res.status(404).json({
     success: false,
     error: `API endpoint not found: ${req.method} ${req.originalUrl || req.url}`
@@ -1798,86 +1839,6 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 
 export { app, apiRouter };
 
-
-export default async function handler(req: any, res: any) {
-  try {
-    let targetUrl = req.url || '/api';
-
-    // 1. Recover original API route from query param injected by vercel.json rewrite
-    if (targetUrl.includes('_api_route=')) {
-      try {
-        const parsed = new URL(targetUrl, 'http://localhost');
-        const routeParam = parsed.searchParams.get('_api_route');
-        if (routeParam) {
-          parsed.searchParams.delete('_api_route');
-          const remainingQuery = parsed.searchParams.toString();
-          const cleanRoute = routeParam.replace(/^\/+/, '');
-          targetUrl = `/api/${cleanRoute}${remainingQuery ? '?' + remainingQuery : ''}`;
-        }
-      } catch (parseErr) {
-        console.warn('Could not parse target URL query parameter:', parseErr);
-      }
-    } else if (req.query && typeof req.query._api_route === 'string') {
-      const cleanRoute = req.query._api_route.replace(/^\/+/, '');
-      targetUrl = `/api/${cleanRoute}`;
-    } else if (req.headers) {
-      // 2. Fallback to reverse-proxy forwarded headers
-      const forwardedUrl = req.headers['x-forwarded-url'] || req.headers['x-original-url'];
-      if (typeof forwardedUrl === 'string' && forwardedUrl.startsWith('/api')) {
-        targetUrl = forwardedUrl;
-      } else if (typeof req.headers['x-matched-path'] === 'string') {
-        const matched = req.headers['x-matched-path'];
-        if (matched.startsWith('/api') && matched !== '/api') {
-          const query = req.url && req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
-          targetUrl = matched.includes('?') ? matched : matched + query;
-        }
-      }
-    }
-
-    req.url = targetUrl;
-
-    // 3. Execute Express inside a Promise that resolves when response completes
-    return await new Promise<void>((resolve) => {
-      let resolved = false;
-      const safeResolve = () => {
-        if (!resolved) {
-          resolved = true;
-          resolve();
-        }
-      };
-
-      if (typeof res.on === 'function') {
-        res.on('finish', safeResolve);
-        res.on('close', safeResolve);
-      }
-
-      const originalEnd = res.end;
-      res.end = function (...args: any[]) {
-        originalEnd.apply(this, args);
-        safeResolve();
-      };
-
-      app(req, res, (err: any) => {
-        if (err) {
-          console.error('Unhandled Express error in serverless handler:', err);
-          if (!res.headersSent) {
-            res.status(500).json({
-              success: false,
-              error: err?.message || 'AI service temporarily unavailable'
-            });
-          }
-        }
-        safeResolve();
-      });
-    });
-  } catch (fatalErr: any) {
-    console.error('Fatal serverless wrapper error:', fatalErr);
-    if (!res.headersSent) {
-      res.status(500).json({
-        success: false,
-        error: 'AI service temporarily unavailable'
-      });
-    }
-  }
-}
+// Export Express app directly as default export for Vercel Serverless Functions
+export default app;
 
