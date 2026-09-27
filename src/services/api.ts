@@ -11,6 +11,7 @@ import {
 } from '../types';
 
 import { INITIAL_PROJECTS, INITIAL_TEMPLATES } from '../data/mockData';
+import { AuthClient } from '../lib/authClient';
 
 const STORAGE_KEYS = {
   PROJECTS: 'kiran_studio_projects',
@@ -36,9 +37,25 @@ export class StudioApiService {
     }
   }
 
-  // Projects CRUD with Local Storage Persistence
+  // Projects CRUD with Local Storage & Neon PostgreSQL Persistence
   static getProjects(): Project[] {
     return this.getStored<Project[]>(STORAGE_KEYS.PROJECTS, INITIAL_PROJECTS);
+  }
+
+  /**
+   * Fetch projects from Neon PostgreSQL if user is logged in
+   */
+  static async fetchProjects(): Promise<Project[]> {
+    try {
+      const res = await AuthClient.getProjects();
+      if (res.success && Array.isArray(res.projects)) {
+        this.setStored(STORAGE_KEYS.PROJECTS, res.projects);
+        return res.projects;
+      }
+    } catch (e) {
+      console.warn('Neon projects fetch fallback to local storage:', e);
+    }
+    return this.getProjects();
   }
 
   static saveProject(project: Project): Project {
@@ -55,9 +72,37 @@ export class StudioApiService {
     return project;
   }
 
+  /**
+   * Save project to Neon PostgreSQL if authenticated, while syncing local storage
+   */
+  static async saveProjectAsync(project: Project): Promise<Project> {
+    try {
+      const res = await AuthClient.saveProject(project);
+      if (res.success && res.project) {
+        this.saveProject(res.project);
+        return res.project;
+      }
+    } catch (e) {
+      console.warn('Neon project save fallback to local storage:', e);
+    }
+    return this.saveProject(project);
+  }
+
   static deleteProject(id: string): void {
     const projects = this.getProjects().filter(p => p.id !== id);
     this.setStored(STORAGE_KEYS.PROJECTS, projects);
+  }
+
+  /**
+   * Delete project from Neon PostgreSQL if authenticated
+   */
+  static async deleteProjectAsync(id: string): Promise<void> {
+    try {
+      await AuthClient.deleteProject(id);
+    } catch (e) {
+      console.warn('Neon project delete fallback:', e);
+    }
+    this.deleteProject(id);
   }
 
   static duplicateProject(id: string): Project | null {
@@ -66,7 +111,7 @@ export class StudioApiService {
     if (!original) return null;
     const duplicated: Project = {
       ...original,
-      id: 'proj-' + Date.now(),
+      id: 'proj_' + Math.random().toString(36).substring(2, 10),
       name: `${original.name} (Copy)`,
       status: 'Draft',
       createdAt: new Date().toISOString(),
@@ -74,6 +119,24 @@ export class StudioApiService {
     };
     this.saveProject(duplicated);
     return duplicated;
+  }
+
+  /**
+   * Duplicate project and persist to Neon PostgreSQL
+   */
+  static async duplicateProjectAsync(id: string): Promise<Project | null> {
+    const projects = await this.fetchProjects();
+    const original = projects.find(p => p.id === id);
+    if (!original) return null;
+    const duplicated: Project = {
+      ...original,
+      id: 'proj_' + Math.random().toString(36).substring(2, 10),
+      name: `${original.name} (Copy)`,
+      status: 'Draft',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    return await this.saveProjectAsync(duplicated);
   }
 
   // Templates

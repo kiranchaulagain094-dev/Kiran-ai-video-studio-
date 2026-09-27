@@ -30,12 +30,16 @@ END $$;
 -- Requirements:
 -- - Immutable unique user ID format: 'usr_' + hex/uuid
 -- - Unique normalized username (case-insensitive indexing)
--- - Password hash strictly bcrypt hashed (never plaintext)
+-- - Password hash nullable for OAuth users (never plaintext)
+-- - OAuth provider and provider user ID for Google authentication
 CREATE TABLE IF NOT EXISTS users (
     id VARCHAR(64) PRIMARY KEY,
     username VARCHAR(64) NOT NULL,
     display_username VARCHAR(64) NOT NULL,
-    password_hash VARCHAR(255) NOT NULL,
+    email VARCHAR(255),
+    auth_provider VARCHAR(32) DEFAULT 'local' NOT NULL,
+    provider_user_id VARCHAR(128),
+    password_hash VARCHAR(255),
     role user_role DEFAULT 'user' NOT NULL,
     status user_status DEFAULT 'active' NOT NULL,
     avatar TEXT,
@@ -45,6 +49,8 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- Case-insensitive unique index on normalized username
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (LOWER(username));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_provider_id ON users (auth_provider, provider_user_id) WHERE provider_user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(email)) WHERE email IS NOT NULL;
 
 -- 4. USER SESSIONS TABLE
 -- Requirements:

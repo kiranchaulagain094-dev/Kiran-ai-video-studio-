@@ -1,8 +1,12 @@
 import express from 'express';
 import dotenv from 'dotenv';
 dotenv.config({ override: true });
+import cookieParser from 'cookie-parser';
 
 import { GoogleGenAI } from '@google/genai';
+import { attachUserMiddleware } from '../server/auth';
+import authRouter from '../server/routes/authRoutes';
+import projectRouter from '../server/routes/projectRoutes';
 
 export const CURRENT_APP_VERSION = "1.1.0";
 export const APP_CHANGELOGS: Record<string, any> = {
@@ -175,9 +179,15 @@ export class VideoGenerationService {
 
 const app = express();
 
-// CORS Headers for all incoming requests
+// CORS Headers supporting credentials for session cookies
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  const origin = req.headers.origin;
+  if (origin) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
+  } else {
+    res.header('Access-Control-Allow-Origin', '*');
+  }
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
   if (req.method === 'OPTIONS') {
@@ -185,6 +195,18 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Cookie parser for session management
+app.use(cookieParser());
+
+const isServerless = Boolean(
+  process.env.VERCEL ||
+  process.env.VERCEL_ENV ||
+  process.env.NOW_REGION ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  process.env.LAMBDA_TASK_ROOT ||
+  process.env.SERVERLESS
+);
 
 // URL Normalizer for Vercel Rewrites
 app.use((req, res, next) => {
@@ -194,6 +216,9 @@ app.use((req, res, next) => {
   } else if (req.query && typeof req.query._api_route === 'string') {
     const cleanRoute = (req.query._api_route as string).replace(/^\/+/, '');
     req.url = `/api/${cleanRoute}`;
+  } else if (isServerless && !req.url.startsWith('/api')) {
+    // Only in serverless environment where every request to this handler is intended for the API
+    req.url = `/api${req.url.startsWith('/') ? req.url : `/${req.url}`}`;
   }
   next();
 });
@@ -238,6 +263,14 @@ app.use((req, res, next) => {
 
 // Dedicated API Router
 const apiRouter = express.Router();
+
+// Attach authenticated session user to all requests
+app.use(attachUserMiddleware);
+apiRouter.use(attachUserMiddleware);
+
+// Mount Auth & Projects Routers
+apiRouter.use('/auth', authRouter);
+apiRouter.use('/projects', projectRouter);
 
 // Helper to safely extract JSON from Gemini text responses
 function extractJsonFromText(rawText: string): any {
@@ -444,8 +477,8 @@ async function generateGeminiContentWithFallback(
   throw lastError || new Error('All AI service candidates were temporarily unavailable. Please retry.');
 }
 
-// System Status & Health Probes
-apiRouter.get(['/', '/health', '/api/health', '/status'], (req, res) => {
+// System Status & Health Check Handler
+export function handleHealthCheck(req: express.Request, res: express.Response) {
   const hasGemini = Boolean(getGeminiApiKey());
 
   res.json({
@@ -469,7 +502,9 @@ apiRouter.get(['/', '/health', '/api/health', '/status'], (req, res) => {
       timelinePlanner: true
     }
   });
-});
+}
+
+apiRouter.get(['/', '/health', '/api/health', '/status', '/api/status'], handleHealthCheck);
 
 // Centralized Version and Changelog Probe
 apiRouter.get(['/version', '/api/version', '/app-version', '/api/app-version'], (req, res) => {
@@ -1809,23 +1844,17 @@ apiRouter.get(['/video/jobs/:id', '/api/video/jobs/:id'], async (req, res) => {
   }
 });
 
-// Mount the API Router specifically at '/api', '/health', '/status', and root
-app.use('/api', apiRouter);
-app.use('/health', apiRouter);
-app.use('/status', apiRouter);
-app.use(apiRouter);
-
-// Explicit 404 Handler for unrecognized API routes
-app.use((req, res) => {
+// 404 Handler strictly for unrecognized routes under /api
+apiRouter.use((req, res) => {
   res.status(404).json({
     success: false,
     error: `API endpoint not found: ${req.method} ${req.originalUrl || req.url}`
   });
 });
 
-// Controlled Global Error Handler
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('Controlled server error:', err?.message || err);
+// Controlled API Error Handler
+apiRouter.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('Controlled API error:', err?.message || err);
   if (res.headersSent) {
     return next(err);
   }
@@ -1836,6 +1865,12 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
     status
   });
 });
+
+// Mount the API Router specifically at '/api'
+app.use('/api', apiRouter);
+
+// Standalone health and status endpoints (without intercepting the frontend root '/')
+app.get(['/health', '/status'], handleHealthCheck);
 
 export { app, apiRouter };
 

@@ -29,6 +29,8 @@ import { ALL_ARTICLES, getArticleBySlug } from './data/articles';
 import { Project } from './types';
 import { StudioApiService } from './services/api';
 import { UpdateNotificationModal } from './components/common/UpdateNotificationModal';
+import { AuthModal } from './components/common/AuthModal';
+import { useAuth } from './context/AuthContext';
 import { CURRENT_APP_VERSION, APP_VERSION_STORAGE_KEY, compareSemVer } from './config/version';
 import { 
   DownloadCloud, 
@@ -312,12 +314,18 @@ export default function App() {
       highBitrateRender: true
     };
   });
+  const { user, isAuthenticated } = useAuth();
   const [preferencesSaved, setPreferencesSaved] = useState(false);
 
-  const refreshProjects = () => {
-    const fresh = StudioApiService.getProjects();
+  const refreshProjects = async () => {
+    const fresh = await StudioApiService.fetchProjects();
     setProjects(fresh);
   };
+
+  // Sync projects from Neon PostgreSQL whenever auth state changes
+  useEffect(() => {
+    refreshProjects();
+  }, [user, isAuthenticated]);
 
   const handleUseTemplate = (template: any) => {
     setInitialGeneratorPrompt(template.samplePrompt || template.prompt || '');
@@ -979,6 +987,9 @@ export default function App() {
           onNavigate={navigateTo}
         />
       )}
+
+      {/* Google OAuth & Neon Authentication Modal */}
+      <AuthModal />
 
       {/* Version-Based Full-Screen Update Modal */}
       {showUpdateModal && (
