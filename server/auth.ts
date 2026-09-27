@@ -26,17 +26,49 @@ declare global {
 const COOKIE_NAME = 'kiran_session';
 const SESSION_DURATION_DAYS = 30;
 
-function getSessionSecret(): string {
-  return process.env.SESSION_SECRET || 'kiran-studio-default-jwt-secret-key-prod-2026';
+export function getSessionSecret(): string {
+  if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.trim().length > 0) {
+    return process.env.SESSION_SECRET.trim();
+  }
+  return 'kiran-studio-default-jwt-secret-key-prod-2026';
 }
 
+/**
+ * Robust base URL resolver supporting Vercel production domain, preview branches, Cloud Run, and localhost
+ */
 export function getBaseUrl(req: Request): string {
+  // 1. Explicitly configured APP_URL takes priority
   if (process.env.APP_URL && process.env.APP_URL.trim().length > 0) {
-    return process.env.APP_URL.trim().replace(/\/+$/, '');
+    let appUrl = process.env.APP_URL.trim().replace(/\/+$/, '');
+    if (!appUrl.startsWith('http://') && !appUrl.startsWith('https://')) {
+      appUrl = `https://${appUrl}`;
+    }
+    return appUrl;
   }
-  const proto = (req.headers['x-forwarded-proto'] as string) || (req.secure ? 'https' : 'http');
-  const host = (req.headers['x-forwarded-host'] as string) || req.get('host') || 'localhost:3000';
-  return `${proto}://${host}`;
+
+  // 2. Incoming request headers (standard reverse-proxy and Vercel edge headers)
+  const protoHeader = req.headers['x-forwarded-proto'];
+  const proto = typeof protoHeader === 'string' ? protoHeader.split(',')[0].trim() : (req.secure ? 'https' : 'http');
+  
+  const hostHeader = req.headers['x-forwarded-host'] || req.headers['host'] || req.get('host');
+  const host = typeof hostHeader === 'string' ? hostHeader.split(',')[0].trim() : '';
+
+  if (host && !host.includes('localhost') && !host.includes('127.0.0.1')) {
+    return `${proto}://${host}`;
+  }
+
+  // 3. Vercel deployment URL fallback
+  const vercelEnvUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
+  if (vercelEnvUrl && vercelEnvUrl.trim().length > 0) {
+    const clean = vercelEnvUrl.trim().replace(/\/+$/, '');
+    return clean.startsWith('http') ? clean : `https://${clean}`;
+  }
+
+  if (host) {
+    return `${proto}://${host}`;
+  }
+
+  return 'http://localhost:3000';
 }
 
 export function getGoogleRedirectUri(req: Request): string {
@@ -56,7 +88,7 @@ export function isGoogleOAuthConfigured(): boolean {
  * Generate Google OAuth 2.0 authorization URL
  */
 export function getGoogleAuthorizationUrl(req: Request, state?: string): string {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
   if (!clientId) {
     throw new Error('GOOGLE_CLIENT_ID is not configured in environment variables.');
   }
@@ -87,8 +119,8 @@ export async function exchangeGoogleCodeForUser(code: string, redirectUri: strin
   picture: string;
   email_verified: boolean;
 }> {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
 
   if (!clientId || !clientSecret) {
     throw new Error('Google OAuth credentials (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET) are missing.');
@@ -110,7 +142,13 @@ export async function exchangeGoogleCodeForUser(code: string, redirectUri: strin
   if (!tokenRes.ok) {
     const errorData = await tokenRes.text();
     console.error('Google token exchange failed:', errorData);
-    throw new Error(`Google token exchange error: ${tokenRes.status}`);
+    let detail = `HTTP ${tokenRes.status}`;
+    try {
+      const parsed = JSON.parse(errorData);
+      if (parsed.error_description) detail = parsed.error_description;
+      else if (parsed.error) detail = parsed.error;
+    } catch {}
+    throw new Error(`Google token exchange error: ${detail}`);
   }
 
   const tokenData = await tokenRes.json();
@@ -154,7 +192,7 @@ export async function findOrCreateGoogleUser(profile: {
     [profile.sub, profile.email]
   );
 
-  if (existing.length > 0) {
+  if (existing && existing.length > 0) {
     const user = existing[0];
     
     // Update avatar or display name if changed
@@ -164,19 +202,19 @@ export async function findOrCreateGoogleUser(profile: {
          SET avatar = $1, display_username = COALESCE(display_username, $2), auth_provider = 'google', provider_user_id = $3, updated_at = CURRENT_TIMESTAMP 
          WHERE id = $4`,
         [profile.picture, profile.name || user.display_username, profile.sub, user.id]
-      );
+      ).catch(() => {});
       user.avatar = profile.picture;
     }
 
     return {
       id: user.id,
       username: user.username,
-      display_username: user.display_username,
+      display_username: user.display_username || user.username,
       email: user.email,
-      role: user.role,
-      status: user.status,
+      role: user.role || 'user',
+      status: user.status || 'active',
       avatar: user.avatar,
-      auth_provider: user.auth_provider
+      auth_provider: user.auth_provider || 'google'
     };
   }
 
@@ -230,7 +268,8 @@ export async function createUserSession(userId: string, req: Request): Promise<{
   const sessionId = `sess_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
   const token = crypto.randomBytes(32).toString('hex');
   const tokenHash = hashSessionToken(token);
-  const ipAddress = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || null;
+  const forwardedIp = req.headers['x-forwarded-for'];
+  const ipAddress = typeof forwardedIp === 'string' ? forwardedIp.split(',')[0].trim() : req.ip || null;
   const userAgent = (req.headers['user-agent'] as string) || null;
   const expiresAt = new Date(Date.now() + SESSION_DURATION_DAYS * 24 * 60 * 60 * 1000);
 
@@ -250,10 +289,16 @@ export async function createUserSession(userId: string, req: Request): Promise<{
  */
 export function setSessionCookie(res: Response, cookieValue: string, req: Request): void {
   const isProd = process.env.NODE_ENV === 'production' || !req.hostname.includes('localhost');
+  const isIframeOrPreview = Boolean(
+    req.headers['sec-fetch-dest'] === 'iframe' ||
+    req.hostname.includes('.run.app') ||
+    req.headers['x-forwarded-host']?.toString().includes('.run.app')
+  );
+
   res.cookie(COOKIE_NAME, cookieValue, {
     httpOnly: true,
-    secure: isProd,
-    sameSite: 'lax',
+    secure: isProd || isIframeOrPreview,
+    sameSite: isIframeOrPreview ? 'none' : 'lax',
     maxAge: SESSION_DURATION_DAYS * 24 * 60 * 60 * 1000,
     path: '/'
   });
@@ -264,10 +309,16 @@ export function setSessionCookie(res: Response, cookieValue: string, req: Reques
  */
 export function clearSessionCookie(res: Response, req: Request): void {
   const isProd = process.env.NODE_ENV === 'production' || !req.hostname.includes('localhost');
+  const isIframeOrPreview = Boolean(
+    req.headers['sec-fetch-dest'] === 'iframe' ||
+    req.hostname.includes('.run.app') ||
+    req.headers['x-forwarded-host']?.toString().includes('.run.app')
+  );
+
   res.clearCookie(COOKIE_NAME, {
     httpOnly: true,
-    secure: isProd,
-    sameSite: 'lax',
+    secure: isProd || isIframeOrPreview,
+    sameSite: isIframeOrPreview ? 'none' : 'lax',
     path: '/'
   });
 }
@@ -313,7 +364,7 @@ export async function validateSession(sessionId: string, token: string): Promise
   try {
     const rows = await query<any>(
       `SELECT s.id AS session_id, s.token_hash, s.expires_at, 
-              u.id, u.username, u.display_username, u.email, u.role, u.status, u.avatar, u.auth_provider
+              u.id AS user_id, u.username, u.display_username, u.email, u.role, u.status, u.avatar, u.auth_provider
        FROM user_sessions s
        JOIN users u ON s.user_id = u.id
        WHERE s.id = $1 AND s.expires_at > CURRENT_TIMESTAMP AND u.status = 'active'
@@ -321,7 +372,7 @@ export async function validateSession(sessionId: string, token: string): Promise
       [sessionId]
     );
 
-    if (rows.length === 0) return null;
+    if (!rows || rows.length === 0) return null;
     const session = rows[0];
 
     // Verify token hash
@@ -330,21 +381,21 @@ export async function validateSession(sessionId: string, token: string): Promise
       return null;
     }
 
-    // Touch last_active_at asynchronously (no await needed)
+    // Touch last_active_at asynchronously (non-blocking)
     query(`UPDATE user_sessions SET last_active_at = CURRENT_TIMESTAMP WHERE id = $1`, [sessionId]).catch(() => {});
 
     return {
-      id: session.id,
+      id: session.user_id,
       username: session.username,
-      display_username: session.display_username,
+      display_username: session.display_username || session.username,
       email: session.email,
-      role: session.role,
-      status: session.status,
+      role: session.role || 'user',
+      status: session.status || 'active',
       avatar: session.avatar,
-      auth_provider: session.auth_provider
+      auth_provider: session.auth_provider || 'google'
     };
   } catch (err) {
-    console.error('Session validation error in Neon:', err);
+    console.warn('Session validation check error:', err);
     return null;
   }
 }
@@ -353,6 +404,10 @@ export async function validateSession(sessionId: string, token: string): Promise
  * Express middleware to attach user to request if session is valid
  */
 export async function attachUserMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
+  if (req.user) {
+    return next();
+  }
+
   const credentials = extractSessionCredentials(req);
   if (!credentials) {
     return next();
@@ -394,6 +449,6 @@ export async function revokeSession(sessionId: string): Promise<void> {
   try {
     await query(`DELETE FROM user_sessions WHERE id = $1`, [sessionId]);
   } catch (e) {
-    console.error('Failed to revoke session:', e);
+    console.warn('Failed to revoke session:', e);
   }
 }

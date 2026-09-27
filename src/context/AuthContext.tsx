@@ -49,6 +49,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     if (authErrorParam) {
       setAuthError(authErrorParam);
+      setIsLoginModalOpen(true);
       // Clean query parameter from URL without reload
       const newUrl = window.location.pathname;
       window.history.replaceState({}, document.title, newUrl);

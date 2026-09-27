@@ -2,12 +2,7 @@ import React from 'react';
 import { 
   X, 
   Sparkles, 
-  ShieldCheck, 
-  Database, 
-  FolderGit2, 
-  AlertCircle,
-  ExternalLink,
-  CheckCircle2
+  AlertCircle
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -18,7 +13,6 @@ export const AuthModal: React.FC = () => {
     loginWithGoogle, 
     authError, 
     clearAuthError,
-    config,
     isLoading 
   } = useAuth();
 
@@ -27,11 +21,11 @@ export const AuthModal: React.FC = () => {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in">
       <div 
-        className="relative w-full max-w-md rounded-3xl bg-[#0f1320] border border-cyan-500/30 p-6 sm:p-8 shadow-2xl shadow-cyan-950/50 space-y-6 text-left"
+        className="relative w-full max-w-sm rounded-3xl bg-[#0f1320] border border-cyan-500/30 p-6 sm:p-7 shadow-2xl shadow-cyan-950/50 space-y-6 text-left"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Ambient Top Glow */}
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-20 bg-cyan-500/15 blur-3xl pointer-events-none rounded-full" />
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-40 h-16 bg-cyan-500/15 blur-3xl pointer-events-none rounded-full" />
 
         {/* Close Button */}
         <button
@@ -44,7 +38,7 @@ export const AuthModal: React.FC = () => {
         </button>
 
         {/* Brand & Title */}
-        <div className="space-y-2">
+        <div className="space-y-2 pr-6">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-xs font-semibold">
             <Sparkles className="w-3.5 h-3.5" />
             <span>Kiran AI Studio Account</span>
@@ -53,7 +47,7 @@ export const AuthModal: React.FC = () => {
             Sign In with Google
           </h2>
           <p className="text-xs sm:text-sm text-slate-400">
-            Connect your Google account to access Neon PostgreSQL cloud project storage and sync your AI video creations.
+            Sign in to save, organize, and sync your video projects across devices.
           </p>
         </div>
 
@@ -76,7 +70,7 @@ export const AuthModal: React.FC = () => {
         )}
 
         {/* Google OAuth Login Button */}
-        <div className="space-y-3">
+        <div className="pt-1">
           <button
             type="button"
             id="google-signin-btn"
@@ -105,44 +99,6 @@ export const AuthModal: React.FC = () => {
             </svg>
             <span>Continue with Google</span>
           </button>
-
-          <p className="text-[11px] text-center text-slate-500">
-            Uses server-side OAuth 2.0 code exchange. Client secrets are never exposed.
-          </p>
-        </div>
-
-        {/* Benefits List */}
-        <div className="pt-2 border-t border-white/5 space-y-2.5 text-xs text-slate-300">
-          <div className="flex items-center gap-2.5">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>Save & edit video timeline plans in <strong>Neon PostgreSQL</strong></span>
-          </div>
-          <div className="flex items-center gap-2.5">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>Strict per-user data isolation and project ownership</span>
-          </div>
-          <div className="flex items-center gap-2.5">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>Secure HttpOnly cookie session management</span>
-          </div>
-        </div>
-
-        {/* Server & DB Status */}
-        <div className="p-3 rounded-2xl bg-white/[0.03] border border-white/5 flex items-center justify-between text-[11px] text-slate-400">
-          <div className="flex items-center gap-1.5">
-            <Database className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Database:</span>
-            <span className={config?.database ? 'text-emerald-400 font-mono font-semibold' : 'text-amber-400 font-mono'}>
-              {config?.database ? 'Neon PostgreSQL Connected' : 'Checking...'}
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Google OAuth:</span>
-            <span className={config?.googleOAuth ? 'text-emerald-400 font-mono font-semibold' : 'text-slate-400 font-mono'}>
-              {config?.googleOAuth ? 'Ready' : 'Vercel Env'}
-            </span>
-          </div>
         </div>
       </div>
     </div>

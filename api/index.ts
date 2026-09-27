@@ -210,12 +210,20 @@ const isServerless = Boolean(
 
 // URL Normalizer for Vercel Rewrites
 app.use((req, res, next) => {
+  const matchedPath = req.headers['x-matched-path'] || req.headers['x-vercel-matched-path'];
   const forwarded = req.headers['x-forwarded-url'] || req.headers['x-original-url'];
-  if (typeof forwarded === 'string' && forwarded.startsWith('/api')) {
+
+  if (typeof matchedPath === 'string' && matchedPath.startsWith('/api') && matchedPath !== '/api') {
+    const queryIndex = req.url.indexOf('?');
+    const queryString = queryIndex !== -1 ? req.url.substring(queryIndex) : '';
+    req.url = `${matchedPath}${queryString}`;
+  } else if (typeof forwarded === 'string' && forwarded.startsWith('/api')) {
     req.url = forwarded;
   } else if (req.query && typeof req.query._api_route === 'string') {
     const cleanRoute = (req.query._api_route as string).replace(/^\/+/, '');
-    req.url = `/api/${cleanRoute}`;
+    const queryIndex = req.url.indexOf('?');
+    const queryString = queryIndex !== -1 ? req.url.substring(queryIndex) : '';
+    req.url = `/api/${cleanRoute}${queryString}`;
   } else if (isServerless && !req.url.startsWith('/api')) {
     // Only in serverless environment where every request to this handler is intended for the API
     req.url = `/api${req.url.startsWith('/') ? req.url : `/${req.url}`}`;
@@ -225,6 +233,12 @@ app.use((req, res, next) => {
 
 // JSON and URL-encoded body parsers with pre-parsed body detection
 app.use((req, res, next) => {
+  // CRITICAL FOR SERVERLESS: Skip body parsing for GET, HEAD, and OPTIONS.
+  // Invoking stream body parsers on GET requests in Vercel causes timeouts and FUNCTION_INVOCATION_FAILED.
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+    return next();
+  }
+
   if (req.body !== undefined && req.body !== null && typeof req.body === 'object') {
     return next();
   }
@@ -245,7 +259,11 @@ app.use((req, res, next) => {
     next();
   });
 });
+
 app.use((req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+    return next();
+  }
   if (req.body !== undefined && req.body !== null && typeof req.body === 'object') {
     return next();
   }
@@ -264,11 +282,14 @@ app.use((req, res, next) => {
 // Dedicated API Router
 const apiRouter = express.Router();
 
-// Attach authenticated session user to all requests
+// Attach authenticated session user to requests
 app.use(attachUserMiddleware);
-apiRouter.use(attachUserMiddleware);
 
-// Mount Auth & Projects Routers
+// Direct mount on app for /api/auth and /api/projects for robust Vercel serverless routing
+app.use('/api/auth', authRouter);
+app.use('/api/projects', projectRouter);
+
+// Also mount on apiRouter
 apiRouter.use('/auth', authRouter);
 apiRouter.use('/projects', projectRouter);
 
