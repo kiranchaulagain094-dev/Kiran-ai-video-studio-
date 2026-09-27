@@ -1,10 +1,9 @@
-import { neon, Pool } from '@neondatabase/serverless';
+import { neon } from '@neondatabase/serverless';
 import dotenv from 'dotenv';
 
 dotenv.config({ override: true });
 
 let sqlClient: any = null;
-let fallbackPool: Pool | null = null;
 let isInitialized = false;
 let initPromise: Promise<void> | null = null;
 
@@ -26,26 +25,8 @@ export function getDbClient() {
   return sqlClient;
 }
 
-export function getDbPool(): Pool | null {
-  if (!isDbConfigured()) {
-    return null;
-  }
-
-  if (!fallbackPool) {
-    const connectionString = process.env.DATABASE_URL!.trim();
-    fallbackPool = new Pool({
-      connectionString,
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000
-    });
-
-    fallbackPool.on('error', (err) => {
-      console.warn('Neon database pool error (non-fatal):', err?.message || err);
-    });
-  }
-
-  return fallbackPool;
+export function getDbPool(): any {
+  return getDbClient();
 }
 
 /**
@@ -60,7 +41,7 @@ export async function query<T = any>(text: string, params?: any[]): Promise<T[]>
   if (!isInitialized) {
     if (!initPromise) {
       initPromise = initDbSchema().catch((err) => {
-        console.warn('Schema initialization warning:', err?.message || err);
+        console.warn('Schema initialization note:', err?.message || err);
         isInitialized = true;
       });
     }
@@ -68,30 +49,19 @@ export async function query<T = any>(text: string, params?: any[]): Promise<T[]>
   }
 
   const sql = getDbClient();
-  if (sql) {
-    try {
-      if (params && params.length > 0) {
-        return (await sql.query(text, params)) as T[];
-      } else {
-        return (await sql.query(text)) as T[];
-      }
-    } catch (httpErr: any) {
-      console.warn('Neon HTTP query failed, attempting Pool fallback:', httpErr?.message || httpErr);
-    }
+  if (!sql) {
+    throw new Error('Unable to connect to Neon database client.');
   }
 
-  // Fallback to Pool if HTTP query failed
-  const pool = getDbPool();
-  if (!pool) {
-    throw new Error('Unable to connect to Neon database.');
-  }
-
-  const client = await pool.connect();
   try {
-    const res = await client.query(text, params);
-    return res.rows as T[];
-  } finally {
-    client.release();
+    if (params && params.length > 0) {
+      return (await sql.query(text, params)) as T[];
+    } else {
+      return (await sql.query(text)) as T[];
+    }
+  } catch (err: any) {
+    console.error('Neon database query error:', err?.message || err);
+    throw err;
   }
 }
 
@@ -106,26 +76,22 @@ export async function initDbSchema(): Promise<void> {
   if (!sql) return;
 
   try {
-    // 1. Create types if not exist
+    // 1. Ensure enum types exist
     await sql.query(`
       DO $$ BEGIN
         CREATE TYPE user_role AS ENUM ('user', 'admin');
       EXCEPTION WHEN duplicate_object THEN null; END $$;
-    `).catch(() => {});
 
-    await sql.query(`
       DO $$ BEGIN
         CREATE TYPE user_status AS ENUM ('active', 'suspended');
       EXCEPTION WHEN duplicate_object THEN null; END $$;
-    `).catch(() => {});
 
-    await sql.query(`
       DO $$ BEGIN
         CREATE TYPE project_status AS ENUM ('draft', 'in_progress', 'rendered', 'ready', 'completed');
       EXCEPTION WHEN duplicate_object THEN null; END $$;
     `).catch(() => {});
 
-    // 2. Create users table
+    // 2. Ensure users table exists with OAuth columns
     await sql.query(`
       CREATE TABLE IF NOT EXISTS users (
         id VARCHAR(64) PRIMARY KEY,
@@ -141,19 +107,14 @@ export async function initDbSchema(): Promise<void> {
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
       );
+
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(32) DEFAULT 'local';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS provider_user_id VARCHAR(128);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255);
+      ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
     `).catch(() => {});
 
-    await sql.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (LOWER(username));`).catch(() => {});
-    await sql.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_provider_id ON users (auth_provider, provider_user_id) WHERE provider_user_id IS NOT NULL;`).catch(() => {});
-    await sql.query(`CREATE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(email)) WHERE email IS NOT NULL;`).catch(() => {});
-
-    // 3. Migrate existing users table if columns missing
-    await sql.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(32) DEFAULT 'local';`).catch(() => {});
-    await sql.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS provider_user_id VARCHAR(128);`).catch(() => {});
-    await sql.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255);`).catch(() => {});
-    await sql.query(`ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;`).catch(() => {});
-
-    // 4. Create user_sessions table
+    // 3. Ensure user_sessions table exists
     await sql.query(`
       CREATE TABLE IF NOT EXISTS user_sessions (
         id VARCHAR(128) PRIMARY KEY,
@@ -167,10 +128,7 @@ export async function initDbSchema(): Promise<void> {
       );
     `).catch(() => {});
 
-    await sql.query(`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON user_sessions(user_id);`).catch(() => {});
-    await sql.query(`CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON user_sessions(expires_at);`).catch(() => {});
-
-    // 5. Create projects table
+    // 4. Ensure projects table exists
     await sql.query(`
       CREATE TABLE IF NOT EXISTS projects (
         id VARCHAR(64) PRIMARY KEY,
@@ -192,16 +150,6 @@ export async function initDbSchema(): Promise<void> {
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
       );
     `).catch(() => {});
-
-    await sql.query(`CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);`).catch(() => {});
-    await sql.query(`CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at DESC);`).catch(() => {});
-
-    // Add extended columns if not present
-    await sql.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS style VARCHAR(64) DEFAULT 'Cinematic';`).catch(() => {});
-    await sql.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS voice VARCHAR(64) DEFAULT 'Female';`).catch(() => {});
-    await sql.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS language VARCHAR(64) DEFAULT 'English';`).catch(() => {});
-    await sql.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS music VARCHAR(64) DEFAULT 'AI Background Music';`).catch(() => {});
-    await sql.query(`ALTER TABLE projects ADD COLUMN IF NOT EXISTS idea_prompt TEXT DEFAULT '';`).catch(() => {});
 
     isInitialized = true;
   } catch (err) {

@@ -23,8 +23,8 @@ declare global {
   }
 }
 
-const COOKIE_NAME = 'kiran_session';
-const SESSION_DURATION_DAYS = 30;
+export const COOKIE_NAME = 'kiran_session';
+export const SESSION_DURATION_DAYS = 30;
 
 export function getSessionSecret(): string {
   if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.trim().length > 0) {
@@ -34,9 +34,50 @@ export function getSessionSecret(): string {
 }
 
 /**
+ * Safely extract host from any request (Express, standard Node IncomingMessage, or VercelRequest)
+ */
+export function getSafeHost(req: any): string {
+  if (!req) return '';
+  if (req.headers) {
+    const forwardedHost = req.headers['x-forwarded-host'];
+    if (typeof forwardedHost === 'string' && forwardedHost.length > 0) {
+      return forwardedHost.split(',')[0].trim();
+    }
+    const hostHeader = req.headers['host'];
+    if (typeof hostHeader === 'string' && hostHeader.length > 0) {
+      return hostHeader.split(',')[0].trim();
+    }
+  }
+  if (typeof req.get === 'function') {
+    try {
+      const h = req.get('host');
+      if (h) return h.split(',')[0].trim();
+    } catch {}
+  }
+  if (typeof req.hostname === 'string' && req.hostname.length > 0) {
+    return req.hostname;
+  }
+  return '';
+}
+
+/**
+ * Safely extract protocol from any request
+ */
+export function getSafeProto(req: any): string {
+  if (req?.headers) {
+    const protoHeader = req.headers['x-forwarded-proto'];
+    if (typeof protoHeader === 'string' && protoHeader.length > 0) {
+      return protoHeader.split(',')[0].trim();
+    }
+  }
+  if (req?.secure) return 'https';
+  return 'https';
+}
+
+/**
  * Robust base URL resolver supporting Vercel production domain, preview branches, Cloud Run, and localhost
  */
-export function getBaseUrl(req: Request): string {
+export function getBaseUrl(req: any): string {
   // 1. Explicitly configured APP_URL takes priority
   if (process.env.APP_URL && process.env.APP_URL.trim().length > 0) {
     let appUrl = process.env.APP_URL.trim().replace(/\/+$/, '');
@@ -47,11 +88,8 @@ export function getBaseUrl(req: Request): string {
   }
 
   // 2. Incoming request headers (standard reverse-proxy and Vercel edge headers)
-  const protoHeader = req.headers['x-forwarded-proto'];
-  const proto = typeof protoHeader === 'string' ? protoHeader.split(',')[0].trim() : (req.secure ? 'https' : 'http');
-  
-  const hostHeader = req.headers['x-forwarded-host'] || req.headers['host'] || req.get('host');
-  const host = typeof hostHeader === 'string' ? hostHeader.split(',')[0].trim() : '';
+  const host = getSafeHost(req);
+  const proto = getSafeProto(req);
 
   if (host && !host.includes('localhost') && !host.includes('127.0.0.1')) {
     return `${proto}://${host}`;
@@ -71,7 +109,7 @@ export function getBaseUrl(req: Request): string {
   return 'http://localhost:3000';
 }
 
-export function getGoogleRedirectUri(req: Request): string {
+export function getGoogleRedirectUri(req: any): string {
   return `${getBaseUrl(req)}/api/auth/google/callback`;
 }
 
@@ -87,7 +125,7 @@ export function isGoogleOAuthConfigured(): boolean {
 /**
  * Generate Google OAuth 2.0 authorization URL
  */
-export function getGoogleAuthorizationUrl(req: Request, state?: string): string {
+export function getGoogleAuthorizationUrl(req: any, state?: string): string {
   const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
   if (!clientId) {
     throw new Error('GOOGLE_CLIENT_ID is not configured in environment variables.');
@@ -259,7 +297,7 @@ function hashSessionToken(token: string): string {
 /**
  * Create a new user session in Neon and generate a signed session cookie
  */
-export async function createUserSession(userId: string, req: Request): Promise<{
+export async function createUserSession(userId: string, req: any): Promise<{
   sessionId: string;
   token: string;
   cookieValue: string;
@@ -268,9 +306,9 @@ export async function createUserSession(userId: string, req: Request): Promise<{
   const sessionId = `sess_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
   const token = crypto.randomBytes(32).toString('hex');
   const tokenHash = hashSessionToken(token);
-  const forwardedIp = req.headers['x-forwarded-for'];
-  const ipAddress = typeof forwardedIp === 'string' ? forwardedIp.split(',')[0].trim() : req.ip || null;
-  const userAgent = (req.headers['user-agent'] as string) || null;
+  const forwardedIp = req?.headers?.['x-forwarded-for'];
+  const ipAddress = typeof forwardedIp === 'string' ? forwardedIp.split(',')[0].trim() : req?.ip || null;
+  const userAgent = req?.headers?.['user-agent'] || null;
   const expiresAt = new Date(Date.now() + SESSION_DURATION_DAYS * 24 * 60 * 60 * 1000);
 
   await query(
@@ -285,71 +323,112 @@ export async function createUserSession(userId: string, req: Request): Promise<{
 }
 
 /**
- * Set the HttpOnly session cookie on response
+ * Set the HttpOnly session cookie on response safely (works on Express and raw Node/Vercel responses)
  */
-export function setSessionCookie(res: Response, cookieValue: string, req: Request): void {
-  const isProd = process.env.NODE_ENV === 'production' || !req.hostname.includes('localhost');
+export function setSessionCookie(res: any, cookieValue: string, req: any): void {
+  const host = getSafeHost(req);
+  const isProd = process.env.NODE_ENV === 'production' || (host ? !host.includes('localhost') : true);
   const isIframeOrPreview = Boolean(
-    req.headers['sec-fetch-dest'] === 'iframe' ||
-    req.hostname.includes('.run.app') ||
-    req.headers['x-forwarded-host']?.toString().includes('.run.app')
+    req?.headers?.['sec-fetch-dest'] === 'iframe' ||
+    host.includes('.run.app')
   );
 
-  res.cookie(COOKIE_NAME, cookieValue, {
-    httpOnly: true,
-    secure: isProd || isIframeOrPreview,
-    sameSite: isIframeOrPreview ? 'none' : 'lax',
-    maxAge: SESSION_DURATION_DAYS * 24 * 60 * 60 * 1000,
-    path: '/'
-  });
-}
+  const sameSite = isIframeOrPreview ? 'None' : 'Lax';
+  const secure = isProd || isIframeOrPreview;
+  const maxAge = SESSION_DURATION_DAYS * 24 * 60 * 60;
 
-/**
- * Clear session cookie on response
- */
-export function clearSessionCookie(res: Response, req: Request): void {
-  const isProd = process.env.NODE_ENV === 'production' || !req.hostname.includes('localhost');
-  const isIframeOrPreview = Boolean(
-    req.headers['sec-fetch-dest'] === 'iframe' ||
-    req.hostname.includes('.run.app') ||
-    req.headers['x-forwarded-host']?.toString().includes('.run.app')
-  );
+  const cookieHeaderValue = `${COOKIE_NAME}=${cookieValue}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=${sameSite}${secure ? '; Secure' : ''}`;
 
-  res.clearCookie(COOKIE_NAME, {
-    httpOnly: true,
-    secure: isProd || isIframeOrPreview,
-    sameSite: isIframeOrPreview ? 'none' : 'lax',
-    path: '/'
-  });
-}
-
-/**
- * Parse session cookie or Bearer token from incoming request
- */
-function extractSessionCredentials(req: Request): { sessionId: string; token: string } | null {
-  // 1. Check HttpOnly cookie
-  const cookieHeader = req.headers.cookie;
-  if (cookieHeader) {
-    const cookies = Object.fromEntries(
-      cookieHeader.split(';').map(c => {
-        const parts = c.trim().split('=');
-        return [parts[0], decodeURIComponent(parts.slice(1).join('='))];
-      })
-    );
-    if (cookies[COOKIE_NAME] && cookies[COOKIE_NAME].includes(':')) {
-      const [sessionId, token] = cookies[COOKIE_NAME].split(':');
-      if (sessionId && token) return { sessionId, token };
+  if (typeof res?.cookie === 'function') {
+    res.cookie(COOKIE_NAME, cookieValue, {
+      httpOnly: true,
+      secure,
+      sameSite: isIframeOrPreview ? 'none' : 'lax',
+      maxAge: maxAge * 1000,
+      path: '/'
+    });
+  } else if (typeof res?.setHeader === 'function') {
+    const existing = res.getHeader?.('Set-Cookie');
+    if (existing) {
+      const cookies = Array.isArray(existing) ? [...existing, cookieHeaderValue] : [existing, cookieHeaderValue];
+      res.setHeader('Set-Cookie', cookies);
+    } else {
+      res.setHeader('Set-Cookie', cookieHeaderValue);
     }
   }
+}
 
-  // 2. Fallback to Authorization: Bearer header
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const val = authHeader.substring(7).trim();
-    if (val.includes(':')) {
-      const [sessionId, token] = val.split(':');
-      if (sessionId && token) return { sessionId, token };
+/**
+ * Clear session cookie on response safely
+ */
+export function clearSessionCookie(res: any, req: any): void {
+  const host = getSafeHost(req);
+  const isProd = process.env.NODE_ENV === 'production' || (host ? !host.includes('localhost') : true);
+  const isIframeOrPreview = Boolean(
+    req?.headers?.['sec-fetch-dest'] === 'iframe' ||
+    host.includes('.run.app')
+  );
+
+  const sameSite = isIframeOrPreview ? 'None' : 'Lax';
+  const secure = isProd || isIframeOrPreview;
+  const cookieHeaderValue = `${COOKIE_NAME}=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=${sameSite}${secure ? '; Secure' : ''}`;
+
+  if (typeof res?.clearCookie === 'function') {
+    res.clearCookie(COOKIE_NAME, {
+      httpOnly: true,
+      secure,
+      sameSite: isIframeOrPreview ? 'none' : 'lax',
+      path: '/'
+    });
+  } else if (typeof res?.setHeader === 'function') {
+    res.setHeader('Set-Cookie', cookieHeaderValue);
+  }
+}
+
+/**
+ * Parse session cookie or Bearer token from incoming request safely without URIError
+ */
+export function extractSessionCredentials(req: any): { sessionId: string; token: string } | null {
+  try {
+    // 1. Check parsed cookies
+    if (req?.cookies && typeof req.cookies === 'object' && req.cookies[COOKIE_NAME]) {
+      const val = req.cookies[COOKIE_NAME];
+      if (typeof val === 'string' && val.includes(':')) {
+        const [sessionId, token] = val.split(':');
+        if (sessionId && token) return { sessionId, token };
+      }
     }
+
+    // 2. Safe parse from raw cookie header
+    const cookieHeader = req?.headers?.cookie;
+    if (typeof cookieHeader === 'string' && cookieHeader.includes(COOKIE_NAME)) {
+      const parts = cookieHeader.split(';');
+      for (const part of parts) {
+        const [k, ...v] = part.trim().split('=');
+        if (k === COOKIE_NAME) {
+          let val = v.join('=');
+          try {
+            val = decodeURIComponent(val);
+          } catch {}
+          if (val && val.includes(':')) {
+            const [sessionId, token] = val.split(':');
+            if (sessionId && token) return { sessionId, token };
+          }
+        }
+      }
+    }
+
+    // 3. Fallback to Authorization: Bearer header
+    const authHeader = req?.headers?.authorization;
+    if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+      const val = authHeader.substring(7).trim();
+      if (val.includes(':')) {
+        const [sessionId, token] = val.split(':');
+        if (sessionId && token) return { sessionId, token };
+      }
+    }
+  } catch {
+    return null;
   }
 
   return null;
