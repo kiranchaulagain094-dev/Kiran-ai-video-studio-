@@ -1,12 +1,11 @@
 import express from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import dotenv from 'dotenv';
 dotenv.config({ override: true });
 import cookieParser from 'cookie-parser';
-
+import crypto from 'crypto';
 import { GoogleGenAI } from '@google/genai';
-import { attachUserMiddleware } from '../server/auth.ts';
-import authRouter from '../server/routes/authRoutes.ts';
-import projectRouter from '../server/routes/projectRoutes.ts';
+import { neon } from '@neondatabase/serverless';
 
 export const CURRENT_APP_VERSION = "1.1.0";
 export const APP_CHANGELOGS: Record<string, any> = {
@@ -288,6 +287,1109 @@ app.use((req, res, next) => {
   });
 });
 
+// ==========================================
+// NEON POSTGRESQL DATABASE CLIENT & HELPERS
+// ==========================================
+let sqlClient: any = null;
+let isInitialized = false;
+let initPromise: Promise<void> | null = null;
+
+export function isDbConfigured(): boolean {
+  const url = process.env.DATABASE_URL;
+  return Boolean(url && url.trim().length > 0 && !url.includes('username:password'));
+}
+
+export function getDbClient() {
+  if (!isDbConfigured()) {
+    return null;
+  }
+  if (!sqlClient) {
+    const connectionString = process.env.DATABASE_URL!.trim();
+    sqlClient = neon(connectionString);
+  }
+  return sqlClient;
+}
+
+export function getDbPool(): any {
+  return getDbClient();
+}
+
+export async function query<T = any>(text: string, params?: any[]): Promise<T[]> {
+  if (!isDbConfigured()) {
+    throw new Error('Database is not configured. DATABASE_URL environment variable is required.');
+  }
+
+  if (!isInitialized) {
+    if (!initPromise) {
+      initPromise = initDbSchema().catch((err) => {
+        console.warn('Schema initialization note:', err?.message || err);
+        isInitialized = true;
+      });
+    }
+    await initPromise;
+  }
+
+  const sql = getDbClient();
+  if (!sql) {
+    throw new Error('Unable to connect to Neon database client.');
+  }
+
+  try {
+    if (params && params.length > 0) {
+      return (await sql.query(text, params)) as T[];
+    } else {
+      return (await sql.query(text)) as T[];
+    }
+  } catch (err: any) {
+    console.error('Neon database query error:', err?.message || err);
+    throw err;
+  }
+}
+
+export async function initDbSchema(): Promise<void> {
+  if (isInitialized) return;
+  if (!isDbConfigured()) return;
+
+  const sql = getDbClient();
+  if (!sql) return;
+
+  try {
+    await sql.query(`
+      DO $$ BEGIN
+        CREATE TYPE user_role AS ENUM ('user', 'admin');
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE TYPE user_status AS ENUM ('active', 'suspended');
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+
+      DO $$ BEGIN
+        CREATE TYPE project_status AS ENUM ('draft', 'in_progress', 'rendered', 'ready', 'completed');
+      EXCEPTION WHEN duplicate_object THEN null; END $$;
+    `).catch(() => {});
+
+    await sql.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id VARCHAR(64) PRIMARY KEY,
+        username VARCHAR(64) NOT NULL,
+        display_username VARCHAR(64) NOT NULL,
+        email VARCHAR(255),
+        auth_provider VARCHAR(32) DEFAULT 'local' NOT NULL,
+        provider_user_id VARCHAR(128),
+        password_hash VARCHAR(255),
+        role user_role DEFAULT 'user' NOT NULL,
+        status user_status DEFAULT 'active' NOT NULL,
+        avatar TEXT,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+      );
+
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(32) DEFAULT 'local';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS provider_user_id VARCHAR(128);
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255);
+      ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+    `).catch(() => {});
+
+    await sql.query(`
+      CREATE TABLE IF NOT EXISTS user_sessions (
+        id VARCHAR(128) PRIMARY KEY,
+        user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token_hash VARCHAR(128) NOT NULL,
+        ip_address VARCHAR(45),
+        user_agent TEXT,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        last_active_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+      );
+    `).catch(() => {});
+
+    await sql.query(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id VARCHAR(64) PRIMARY KEY,
+        user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title VARCHAR(255) NOT NULL,
+        description TEXT DEFAULT '',
+        type VARCHAR(64) DEFAULT 'YouTube Video' NOT NULL,
+        aspect_ratio VARCHAR(32) DEFAULT '16:9' NOT NULL,
+        duration VARCHAR(64) DEFAULT '60 seconds' NOT NULL,
+        status project_status DEFAULT 'draft' NOT NULL,
+        thumbnail_url TEXT,
+        video_url TEXT,
+        tags TEXT[] DEFAULT ARRAY['AI Video']::TEXT[],
+        scenes_count INTEGER DEFAULT 3 NOT NULL,
+        quality VARCHAR(64) DEFAULT '1080p Full HD',
+        script TEXT DEFAULT '',
+        scenes JSONB DEFAULT '[]'::JSONB,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+      );
+    `).catch(() => {});
+
+    isInitialized = true;
+  } catch (err) {
+    console.warn('Schema verification note:', err);
+    isInitialized = true;
+  }
+}
+
+// ==========================================
+// AUTHENTICATION & GOOGLE OAUTH HELPERS
+// ==========================================
+export interface AuthUser {
+  id: string;
+  username: string;
+  display_username: string;
+  email: string | null;
+  role: 'user' | 'admin';
+  status: 'active' | 'suspended';
+  avatar: string | null;
+  auth_provider?: string;
+}
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: AuthUser;
+      sessionToken?: string;
+      sessionId?: string;
+    }
+  }
+}
+
+export const COOKIE_NAME = 'kiran_session';
+export const SESSION_DURATION_DAYS = 30;
+
+export function getSessionSecret(): string {
+  if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.trim().length > 0) {
+    return process.env.SESSION_SECRET.trim();
+  }
+  return 'kiran-studio-default-jwt-secret-key-prod-2026';
+}
+
+export function getSafeHost(req: any): string {
+  if (!req) return '';
+  if (req.headers) {
+    const forwardedHost = req.headers['x-forwarded-host'];
+    if (typeof forwardedHost === 'string' && forwardedHost.length > 0) {
+      return forwardedHost.split(',')[0].trim();
+    }
+    const hostHeader = req.headers['host'];
+    if (typeof hostHeader === 'string' && hostHeader.length > 0) {
+      return hostHeader.split(',')[0].trim();
+    }
+  }
+  if (typeof req.get === 'function') {
+    try {
+      const h = req.get('host');
+      if (h) return h.split(',')[0].trim();
+    } catch {}
+  }
+  if (typeof req.hostname === 'string' && req.hostname.length > 0) {
+    return req.hostname;
+  }
+  return '';
+}
+
+export function getSafeProto(req: any): string {
+  if (req?.headers) {
+    const protoHeader = req.headers['x-forwarded-proto'];
+    if (typeof protoHeader === 'string' && protoHeader.length > 0) {
+      return protoHeader.split(',')[0].trim();
+    }
+  }
+  if (req?.secure) return 'https';
+  return 'https';
+}
+
+export function getBaseUrl(req: any): string {
+  if (process.env.APP_URL && process.env.APP_URL.trim().length > 0) {
+    let appUrl = process.env.APP_URL.trim().replace(/\/+$/, '');
+    if (!appUrl.startsWith('http://') && !appUrl.startsWith('https://')) {
+      appUrl = `https://${appUrl}`;
+    }
+    return appUrl;
+  }
+
+  const host = getSafeHost(req);
+  const proto = getSafeProto(req);
+
+  if (host && !host.includes('localhost') && !host.includes('127.0.0.1')) {
+    return `${proto}://${host}`;
+  }
+
+  const vercelEnvUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
+  if (vercelEnvUrl && vercelEnvUrl.trim().length > 0) {
+    const clean = vercelEnvUrl.trim().replace(/\/+$/, '');
+    return clean.startsWith('http') ? clean : `https://${clean}`;
+  }
+
+  if (host) {
+    return `${proto}://${host}`;
+  }
+
+  return 'http://localhost:3000';
+}
+
+export function getGoogleRedirectUri(req: any): string {
+  return `${getBaseUrl(req)}/api/auth/google/callback`;
+}
+
+export function isGoogleOAuthConfigured(): boolean {
+  return Boolean(
+    process.env.GOOGLE_CLIENT_ID &&
+    process.env.GOOGLE_CLIENT_SECRET &&
+    process.env.GOOGLE_CLIENT_ID.trim().length > 0 &&
+    process.env.GOOGLE_CLIENT_SECRET.trim().length > 0
+  );
+}
+
+export function getGoogleAuthorizationUrl(req: any, state?: string): string {
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
+  if (!clientId) {
+    throw new Error('GOOGLE_CLIENT_ID is not configured in environment variables.');
+  }
+
+  const redirectUri = getGoogleRedirectUri(req);
+  const csrfState = state || crypto.randomBytes(16).toString('hex');
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: 'openid email profile',
+    access_type: 'online',
+    prompt: 'select_account',
+    state: csrfState
+  });
+
+  return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+}
+
+export async function exchangeGoogleCodeForUser(code: string, redirectUri: string): Promise<{
+  sub: string;
+  email: string;
+  name: string;
+  picture: string;
+  email_verified: boolean;
+}> {
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+
+  if (!clientId || !clientSecret) {
+    throw new Error('Google OAuth credentials (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET) are missing.');
+  }
+
+  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
+      grant_type: 'authorization_code'
+    })
+  });
+
+  if (!tokenRes.ok) {
+    const errorData = await tokenRes.text();
+    console.error('Google token exchange failed:', errorData);
+    let detail = `HTTP ${tokenRes.status}`;
+    try {
+      const parsed = JSON.parse(errorData);
+      if (parsed.error_description) detail = parsed.error_description;
+      else if (parsed.error) detail = parsed.error;
+    } catch {}
+    throw new Error(`Google token exchange error: ${detail}`);
+  }
+
+  const tokenData = await tokenRes.json();
+  const accessToken = tokenData.access_token;
+  if (!accessToken) {
+    throw new Error('No access token returned from Google OAuth.');
+  }
+
+  const profileRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+
+  if (!profileRes.ok) {
+    throw new Error('Failed to retrieve user profile from Google.');
+  }
+
+  return await profileRes.json();
+}
+
+export async function findOrCreateGoogleUser(profile: {
+  sub: string;
+  email: string;
+  name: string;
+  picture?: string;
+}): Promise<AuthUser> {
+  if (!isDbConfigured()) {
+    throw new Error('Database is not configured. DATABASE_URL is required to persist users.');
+  }
+
+  const existing = await query<any>(
+    `SELECT id, username, display_username, email, role, status, avatar, auth_provider 
+     FROM users 
+     WHERE (auth_provider = 'google' AND provider_user_id = $1)
+        OR (email IS NOT NULL AND LOWER(email) = LOWER($2))
+     LIMIT 1`,
+    [profile.sub, profile.email]
+  );
+
+  if (existing && existing.length > 0) {
+    const user = existing[0];
+    if (profile.picture && profile.picture !== user.avatar) {
+      await query(
+        `UPDATE users 
+         SET avatar = $1, display_username = COALESCE(display_username, $2), auth_provider = 'google', provider_user_id = $3, updated_at = CURRENT_TIMESTAMP 
+         WHERE id = $4`,
+        [profile.picture, profile.name || user.display_username, profile.sub, user.id]
+      ).catch(() => {});
+      user.avatar = profile.picture;
+    }
+
+    return {
+      id: user.id,
+      username: user.username,
+      display_username: user.display_username || user.username,
+      email: user.email,
+      role: user.role || 'user',
+      status: user.status || 'active',
+      avatar: user.avatar,
+      auth_provider: user.auth_provider || 'google'
+    };
+  }
+
+  const newUserId = `usr_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+  const cleanEmail = profile.email.toLowerCase().trim();
+  const baseUsername = cleanEmail.split('@')[0].replace(/[^a-z0-9_]/g, '').slice(0, 20) || 'creator';
+  const uniqueUsername = `${baseUsername}_${Math.floor(1000 + Math.random() * 9000)}`;
+  const displayName = profile.name || cleanEmail.split('@')[0];
+  const avatar = profile.picture || null;
+  const isAdmin = cleanEmail === 'kiranchaulagain094@gmail.com';
+  const role = isAdmin ? 'admin' : 'user';
+
+  await query(
+    `INSERT INTO users (
+      id, username, display_username, email, auth_provider, provider_user_id, password_hash, role, status, avatar
+    ) VALUES ($1, $2, $3, $4, 'google', $5, NULL, $6, 'active', $7)`,
+    [newUserId, uniqueUsername, displayName, cleanEmail, profile.sub, role, avatar]
+  );
+
+  return {
+    id: newUserId,
+    username: uniqueUsername,
+    display_username: displayName,
+    email: cleanEmail,
+    role,
+    status: 'active',
+    avatar,
+    auth_provider: 'google'
+  };
+}
+
+function hashSessionToken(token: string): string {
+  return crypto.createHash('sha256').update(token + getSessionSecret()).digest('hex');
+}
+
+export async function createUserSession(userId: string, req: any): Promise<{
+  sessionId: string;
+  token: string;
+  cookieValue: string;
+  expiresAt: Date;
+}> {
+  const sessionId = `sess_${crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
+  const token = crypto.randomBytes(32).toString('hex');
+  const tokenHash = hashSessionToken(token);
+  const forwardedIp = req?.headers?.['x-forwarded-for'];
+  const ipAddress = typeof forwardedIp === 'string' ? forwardedIp.split(',')[0].trim() : req?.ip || null;
+  const userAgent = req?.headers?.['user-agent'] || null;
+  const expiresAt = new Date(Date.now() + SESSION_DURATION_DAYS * 24 * 60 * 60 * 1000);
+
+  await query(
+    `INSERT INTO user_sessions (
+      id, user_id, token_hash, ip_address, user_agent, expires_at
+    ) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [sessionId, userId, tokenHash, ipAddress, userAgent, expiresAt]
+  );
+
+  const cookieValue = `${sessionId}:${token}`;
+  return { sessionId, token, cookieValue, expiresAt };
+}
+
+export function setSessionCookie(res: any, cookieValue: string, req: any): void {
+  const host = getSafeHost(req);
+  const isProd = process.env.NODE_ENV === 'production' || (host ? !host.includes('localhost') : true);
+  const isIframeOrPreview = Boolean(
+    req?.headers?.['sec-fetch-dest'] === 'iframe' ||
+    host.includes('.run.app')
+  );
+
+  const sameSite = isIframeOrPreview ? 'None' : 'Lax';
+  const secure = isProd || isIframeOrPreview;
+  const maxAge = SESSION_DURATION_DAYS * 24 * 60 * 60;
+  const cookieHeaderValue = `${COOKIE_NAME}=${cookieValue}; Path=/; Max-Age=${maxAge}; HttpOnly; SameSite=${sameSite}${secure ? '; Secure' : ''}`;
+
+  if (typeof res?.cookie === 'function') {
+    res.cookie(COOKIE_NAME, cookieValue, {
+      httpOnly: true,
+      secure,
+      sameSite: isIframeOrPreview ? 'none' : 'lax',
+      maxAge: maxAge * 1000,
+      path: '/'
+    });
+  } else if (typeof res?.setHeader === 'function') {
+    const existing = res.getHeader?.('Set-Cookie');
+    if (existing) {
+      const cookies = Array.isArray(existing) ? [...existing, cookieHeaderValue] : [existing, cookieHeaderValue];
+      res.setHeader('Set-Cookie', cookies);
+    } else {
+      res.setHeader('Set-Cookie', cookieHeaderValue);
+    }
+  }
+}
+
+export function clearSessionCookie(res: any, req: any): void {
+  const host = getSafeHost(req);
+  const isProd = process.env.NODE_ENV === 'production' || (host ? !host.includes('localhost') : true);
+  const isIframeOrPreview = Boolean(
+    req?.headers?.['sec-fetch-dest'] === 'iframe' ||
+    host.includes('.run.app')
+  );
+
+  const sameSite = isIframeOrPreview ? 'None' : 'Lax';
+  const secure = isProd || isIframeOrPreview;
+  const cookieHeaderValue = `${COOKIE_NAME}=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=${sameSite}${secure ? '; Secure' : ''}`;
+
+  if (typeof res?.clearCookie === 'function') {
+    res.clearCookie(COOKIE_NAME, {
+      httpOnly: true,
+      secure,
+      sameSite: isIframeOrPreview ? 'none' : 'lax',
+      path: '/'
+    });
+  } else if (typeof res?.setHeader === 'function') {
+    res.setHeader('Set-Cookie', cookieHeaderValue);
+  }
+}
+
+export function extractSessionCredentials(req: any): { sessionId: string; token: string } | null {
+  try {
+    if (req?.cookies && typeof req.cookies === 'object' && req.cookies[COOKIE_NAME]) {
+      const val = req.cookies[COOKIE_NAME];
+      if (typeof val === 'string' && val.includes(':')) {
+        const [sessionId, token] = val.split(':');
+        if (sessionId && token) return { sessionId, token };
+      }
+    }
+
+    const cookieHeader = req?.headers?.cookie;
+    if (typeof cookieHeader === 'string' && cookieHeader.includes(COOKIE_NAME)) {
+      const parts = cookieHeader.split(';');
+      for (const part of parts) {
+        const [k, ...v] = part.trim().split('=');
+        if (k === COOKIE_NAME) {
+          let val = v.join('=');
+          try {
+            val = decodeURIComponent(val);
+          } catch {}
+          if (val && val.includes(':')) {
+            const [sessionId, token] = val.split(':');
+            if (sessionId && token) return { sessionId, token };
+          }
+        }
+      }
+    }
+
+    const authHeader = req?.headers?.authorization;
+    if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+      const val = authHeader.substring(7).trim();
+      if (val.includes(':')) {
+        const [sessionId, token] = val.split(':');
+        if (sessionId && token) return { sessionId, token };
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export async function validateSession(sessionId: string, token: string): Promise<AuthUser | null> {
+  if (!isDbConfigured()) return null;
+
+  try {
+    const rows = await query<any>(
+      `SELECT s.id AS session_id, s.token_hash, s.expires_at, 
+              u.id AS user_id, u.username, u.display_username, u.email, u.role, u.status, u.avatar, u.auth_provider
+       FROM user_sessions s
+       JOIN users u ON s.user_id = u.id
+       WHERE s.id = $1 AND s.expires_at > CURRENT_TIMESTAMP AND u.status = 'active'
+       LIMIT 1`,
+      [sessionId]
+    );
+
+    if (!rows || rows.length === 0) return null;
+    const session = rows[0];
+
+    const expectedHash = hashSessionToken(token);
+    if (session.token_hash !== expectedHash) {
+      return null;
+    }
+
+    query(`UPDATE user_sessions SET last_active_at = CURRENT_TIMESTAMP WHERE id = $1`, [sessionId]).catch(() => {});
+
+    return {
+      id: session.user_id,
+      username: session.username,
+      display_username: session.display_username || session.username,
+      email: session.email,
+      role: session.role || 'user',
+      status: session.status || 'active',
+      avatar: session.avatar,
+      auth_provider: session.auth_provider || 'google'
+    };
+  } catch (err) {
+    console.warn('Session validation check error:', err);
+    return null;
+  }
+}
+
+export async function attachUserMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
+  if (req.user) {
+    return next();
+  }
+
+  const credentials = extractSessionCredentials(req);
+  if (!credentials) {
+    return next();
+  }
+
+  try {
+    const user = await validateSession(credentials.sessionId, credentials.token);
+    if (user) {
+      req.user = user;
+      req.sessionId = credentials.sessionId;
+      req.sessionToken = credentials.token;
+    }
+  } catch {}
+
+  next();
+}
+
+export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  if (!req.user) {
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required. Please sign in with Google to access this feature.'
+    });
+    return;
+  }
+  next();
+}
+
+export async function revokeSession(sessionId: string): Promise<void> {
+  if (!isDbConfigured()) return;
+  try {
+    await query(`DELETE FROM user_sessions WHERE id = $1`, [sessionId]);
+  } catch (e) {
+    console.warn('Failed to revoke session:', e);
+  }
+}
+
+// ==========================================
+// AUTH ROUTER SETUP
+// ==========================================
+const authRouter = express.Router();
+
+authRouter.get(['/config', '/auth/config', '/api/auth/config'], (req: Request, res: Response) => {
+  try {
+    const googleOk = isGoogleOAuthConfigured();
+    const dbOk = isDbConfigured();
+
+    res.json({
+      success: true,
+      isConfigured: googleOk && dbOk,
+      googleOAuth: googleOk,
+      database: dbOk,
+      configuredEnvVars: {
+        hasClientId: Boolean(process.env.GOOGLE_CLIENT_ID),
+        hasClientSecret: Boolean(process.env.GOOGLE_CLIENT_SECRET),
+        hasDatabaseUrl: Boolean(process.env.DATABASE_URL),
+        hasSessionSecret: Boolean(process.env.SESSION_SECRET),
+        hasAppUrl: Boolean(process.env.APP_URL)
+      }
+    });
+  } catch (err: any) {
+    res.status(200).json({
+      success: false,
+      isConfigured: false,
+      googleOAuth: false,
+      database: false,
+      error: err?.message || 'Configuration probe error'
+    });
+  }
+});
+
+authRouter.get(['/google', '/auth/google', '/api/auth/google'], (req: Request, res: Response) => {
+  try {
+    const missing: string[] = [];
+    if (!process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID.trim().length === 0) {
+      missing.push('GOOGLE_CLIENT_ID');
+    }
+    if (!process.env.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET.trim().length === 0) {
+      missing.push('GOOGLE_CLIENT_SECRET');
+    }
+    if (!isDbConfigured()) {
+      missing.push('DATABASE_URL');
+    }
+
+    if (missing.length > 0) {
+      const errorMsg = `Google OAuth is not configured. Missing required environment variable(s): ${missing.join(', ')}. Please configure them in your Vercel project settings.`;
+      console.warn('[Google OAuth Config Error]:', errorMsg);
+      
+      const wantsJson = req.headers.accept?.includes('application/json') || req.xhr;
+      if (wantsJson) {
+        return res.status(503).json({ success: false, error: errorMsg });
+      }
+      return res.redirect(`/?auth_error=${encodeURIComponent(errorMsg)}`);
+    }
+
+    const state = (req.query.state as string) || undefined;
+    const authUrl = getGoogleAuthorizationUrl(req, state);
+    res.redirect(authUrl);
+  } catch (err: any) {
+    console.error('Failed to initiate Google OAuth:', err);
+    const message = err?.message || 'Failed to initiate Google OAuth authorization flow.';
+    const wantsJson = req.headers.accept?.includes('application/json') || req.xhr;
+    if (wantsJson) {
+      return res.status(500).json({ success: false, error: message });
+    }
+    res.redirect(`/?auth_error=${encodeURIComponent(message)}`);
+  }
+});
+
+authRouter.get(['/google/callback', '/auth/google/callback', '/api/auth/google/callback'], async (req: Request, res: Response) => {
+  const { code, error, error_description } = req.query;
+
+  if (error) {
+    const errorMsg = (error_description as string) || (error as string) || 'Authentication cancelled by user';
+    console.warn('Google OAuth error callback:', errorMsg);
+    return res.redirect(`/?auth_error=${encodeURIComponent(errorMsg)}`);
+  }
+
+  if (!code || typeof code !== 'string') {
+    return res.redirect('/?auth_error=missing_authorization_code');
+  }
+
+  const missing: string[] = [];
+  if (!process.env.GOOGLE_CLIENT_ID) missing.push('GOOGLE_CLIENT_ID');
+  if (!process.env.GOOGLE_CLIENT_SECRET) missing.push('GOOGLE_CLIENT_SECRET');
+  if (!isDbConfigured()) missing.push('DATABASE_URL');
+
+  if (missing.length > 0) {
+    const errorMsg = `Server configuration error: missing ${missing.join(', ')} in environment variables.`;
+    return res.redirect(`/?auth_error=${encodeURIComponent(errorMsg)}`);
+  }
+
+  try {
+    const redirectUri = getGoogleRedirectUri(req);
+    const profile = await exchangeGoogleCodeForUser(code, redirectUri);
+    const user = await findOrCreateGoogleUser(profile);
+    const session = await createUserSession(user.id, req);
+    setSessionCookie(res, session.cookieValue, req);
+
+    res.redirect('/?auth_success=1');
+  } catch (err: any) {
+    console.error('Google OAuth callback processing error:', err);
+    const message = err?.message || 'Authentication error. Please try again.';
+    res.redirect(`/?auth_error=${encodeURIComponent(message)}`);
+  }
+});
+
+authRouter.get(['/me', '/auth/me', '/api/auth/me'], (req: Request, res: Response) => {
+  try {
+    if (req.user) {
+      res.json({
+        success: true,
+        authenticated: true,
+        user: req.user
+      });
+    } else {
+      res.json({
+        success: true,
+        authenticated: false,
+        user: null
+      });
+    }
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      authenticated: false,
+      user: null,
+      error: err?.message || 'Session query error'
+    });
+  }
+});
+
+authRouter.post(['/logout', '/auth/logout', '/api/auth/logout'], async (req: Request, res: Response) => {
+  try {
+    if (req.sessionId) {
+      await revokeSession(req.sessionId);
+    }
+    clearSessionCookie(res, req);
+    res.json({
+      success: true,
+      message: 'Logged out successfully'
+    });
+  } catch (err: any) {
+    clearSessionCookie(res, req);
+    res.json({
+      success: true,
+      message: 'Logged out'
+    });
+  }
+});
+
+// ==========================================
+// PROJECT ROUTER SETUP
+// ==========================================
+export type ProjectStatus = 'Draft' | 'Generating' | 'Completed' | 'Exported' | 'Failed';
+
+export interface Project {
+  id: string;
+  userId: string;
+  name: string;
+  type: string;
+  aspectRatio: string;
+  duration: string;
+  style?: string;
+  voice?: string;
+  language?: string;
+  music?: string;
+  ideaPrompt?: string;
+  status: ProjectStatus;
+  createdAt: string;
+  updatedAt: string;
+  thumbnailUrl?: string;
+  videoUrl?: string;
+  tags?: string[];
+  scenesCount?: number;
+  quality?: string;
+  script?: string;
+  description?: string;
+  scenes?: any[];
+}
+
+const projectRouter = express.Router();
+
+function dbToFrontendStatus(dbStatus: string): ProjectStatus {
+  switch (dbStatus?.toLowerCase()) {
+    case 'in_progress':
+      return 'Generating';
+    case 'completed':
+    case 'ready':
+      return 'Completed';
+    case 'rendered':
+      return 'Exported';
+    case 'failed':
+      return 'Failed';
+    case 'draft':
+    default:
+      return 'Draft';
+  }
+}
+
+function frontendToDbStatus(feStatus?: string): string {
+  switch (feStatus?.toLowerCase()) {
+    case 'generating':
+      return 'in_progress';
+    case 'completed':
+      return 'completed';
+    case 'exported':
+      return 'rendered';
+    case 'failed':
+      return 'draft';
+    case 'draft':
+    default:
+      return 'draft';
+  }
+}
+
+function mapRowToProject(row: any): Project {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    name: row.title,
+    type: row.type || 'YouTube Video',
+    aspectRatio: row.aspect_ratio || '16:9',
+    duration: row.duration || '60 seconds',
+    style: row.style || 'Cinematic',
+    voice: row.voice || 'Female',
+    language: row.language || 'English',
+    music: row.music || 'AI Background Music',
+    ideaPrompt: row.idea_prompt || row.description || '',
+    status: dbToFrontendStatus(row.status),
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
+    thumbnailUrl: row.thumbnail_url || undefined,
+    videoUrl: row.video_url || undefined,
+    tags: Array.isArray(row.tags) ? row.tags : ['AI Video'],
+    scenesCount: typeof row.scenes_count === 'number' ? row.scenes_count : 3,
+    quality: row.quality || '1080p Full HD',
+    script: row.script || '',
+    description: row.description || '',
+    scenes: typeof row.scenes === 'string' ? JSON.parse(row.scenes) : (row.scenes || [])
+  };
+}
+
+projectRouter.get(['/', '/api/projects'], requireAuth, async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({
+      success: false,
+      error: 'Database is not configured. DATABASE_URL is required to load user projects.'
+    });
+  }
+
+  const userId = req.user!.id;
+
+  try {
+    const rows = await query<any>(
+      `SELECT * FROM projects WHERE user_id = $1 ORDER BY updated_at DESC`,
+      [userId]
+    );
+
+    const projects: Project[] = rows.map(mapRowToProject);
+
+    res.json({
+      success: true,
+      projects
+    });
+  } catch (err: any) {
+    console.error('Failed to load user projects from Neon:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to retrieve projects from database.'
+    });
+  }
+});
+
+projectRouter.post(['/', '/api/projects'], requireAuth, async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({
+      success: false,
+      error: 'Database is not configured. DATABASE_URL is required to save projects.'
+    });
+  }
+
+  const userId = req.user!.id;
+  const body = req.body || {};
+
+  const title = (body.name || body.title || 'Untitled Project').trim();
+  const projectId = body.id && typeof body.id === 'string' && body.id.trim()
+    ? body.id.trim()
+    : `proj_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+
+  const description = body.description || body.ideaPrompt || '';
+  const type = body.type || 'YouTube Video';
+  const aspectRatio = body.aspectRatio || '16:9';
+  const duration = body.duration || '60 seconds';
+  const status = frontendToDbStatus(body.status);
+  const thumbnailUrl = body.thumbnailUrl || null;
+  const videoUrl = body.videoUrl || null;
+  const tags = Array.isArray(body.tags) ? body.tags : ['AI Video'];
+  const scenes = JSON.stringify(body.scenes || []);
+  const scenesCount = typeof body.scenesCount === 'number' ? body.scenesCount : (body.scenes?.length || 3);
+  const quality = body.quality || '1080p Full HD';
+  const script = body.script || '';
+  const style = body.style || 'Cinematic';
+  const voice = body.voice || 'Female';
+  const language = body.language || 'English';
+  const music = body.music || 'AI Background Music';
+  const ideaPrompt = body.ideaPrompt || '';
+
+  try {
+    const rows = await query<any>(
+      `INSERT INTO projects (
+        id, user_id, title, description, type, aspect_ratio, duration, status, 
+        thumbnail_url, video_url, tags, scenes_count, quality, script, scenes,
+        style, voice, language, music, idea_prompt, created_at, updated_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      )
+      ON CONFLICT (id) DO UPDATE SET
+        title = EXCLUDED.title,
+        description = EXCLUDED.description,
+        type = EXCLUDED.type,
+        aspect_ratio = EXCLUDED.aspect_ratio,
+        duration = EXCLUDED.duration,
+        status = EXCLUDED.status,
+        thumbnail_url = EXCLUDED.thumbnail_url,
+        video_url = EXCLUDED.video_url,
+        tags = EXCLUDED.tags,
+        scenes_count = EXCLUDED.scenes_count,
+        quality = EXCLUDED.quality,
+        script = EXCLUDED.script,
+        scenes = EXCLUDED.scenes,
+        style = EXCLUDED.style,
+        voice = EXCLUDED.voice,
+        language = EXCLUDED.language,
+        music = EXCLUDED.music,
+        idea_prompt = EXCLUDED.idea_prompt,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE projects.user_id = $2
+      RETURNING *`,
+      [
+        projectId, userId, title, description, type, aspectRatio, duration, status,
+        thumbnailUrl, videoUrl, tags, scenesCount, quality, script, scenes,
+        style, voice, language, music, ideaPrompt
+      ]
+    );
+
+    if (rows.length === 0) {
+      return res.status(403).json({
+        success: false,
+        error: 'You do not have permission to update this project.'
+      });
+    }
+
+    const savedProject = mapRowToProject(rows[0]);
+    res.json({
+      success: true,
+      project: savedProject
+    });
+  } catch (err: any) {
+    console.error('Failed to create/save project in Neon:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to save project to database.'
+    });
+  }
+});
+
+projectRouter.put(['/:id', '/api/projects/:id'], requireAuth, async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({
+      success: false,
+      error: 'Database is not configured. DATABASE_URL is required to update projects.'
+    });
+  }
+
+  const userId = req.user!.id;
+  const projectId = req.params.id;
+  const body = req.body || {};
+
+  const title = (body.name || body.title || 'Untitled Project').trim();
+  const description = body.description || body.ideaPrompt || '';
+  const type = body.type || 'YouTube Video';
+  const aspectRatio = body.aspectRatio || '16:9';
+  const duration = body.duration || '60 seconds';
+  const status = frontendToDbStatus(body.status);
+  const thumbnailUrl = body.thumbnailUrl || null;
+  const videoUrl = body.videoUrl || null;
+  const tags = Array.isArray(body.tags) ? body.tags : ['AI Video'];
+  const scenes = JSON.stringify(body.scenes || []);
+  const scenesCount = typeof body.scenesCount === 'number' ? body.scenesCount : (body.scenes?.length || 3);
+  const quality = body.quality || '1080p Full HD';
+  const script = body.script || '';
+  const style = body.style || 'Cinematic';
+  const voice = body.voice || 'Female';
+  const language = body.language || 'English';
+  const music = body.music || 'AI Background Music';
+  const ideaPrompt = body.ideaPrompt || '';
+
+  try {
+    const rows = await query<any>(
+      `UPDATE projects SET
+        title = $1,
+        description = $2,
+        type = $3,
+        aspect_ratio = $4,
+        duration = $5,
+        status = $6,
+        thumbnail_url = $7,
+        video_url = $8,
+        tags = $9,
+        scenes_count = $10,
+        quality = $11,
+        script = $12,
+        scenes = $13,
+        style = $14,
+        voice = $15,
+        language = $16,
+        music = $17,
+        idea_prompt = $18,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $19 AND user_id = $20
+      RETURNING *`,
+      [
+        title, description, type, aspectRatio, duration, status,
+        thumbnailUrl, videoUrl, tags, scenesCount, quality, script, scenes,
+        style, voice, language, music, ideaPrompt, projectId, userId
+      ]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Project not found or you do not have permission to modify it.'
+      });
+    }
+
+    const updated = mapRowToProject(rows[0]);
+    res.json({
+      success: true,
+      project: updated
+    });
+  } catch (err: any) {
+    console.error('Failed to update project in Neon:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update project in database.'
+    });
+  }
+});
+
+projectRouter.delete(['/:id', '/api/projects/:id'], requireAuth, async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({
+      success: false,
+      error: 'Database is not configured.'
+    });
+  }
+
+  const userId = req.user!.id;
+  const projectId = req.params.id;
+
+  try {
+    const rows = await query<any>(
+      `DELETE FROM projects WHERE id = $1 AND user_id = $2 RETURNING id`,
+      [projectId, userId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Project not found or you do not have permission to delete it.'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Project deleted successfully.'
+    });
+  } catch (err: any) {
+    console.error('Failed to delete project in Neon:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete project from database.'
+    });
+  }
+});
+
 // Dedicated API Router
 const apiRouter = express.Router();
 
@@ -301,6 +1403,7 @@ app.use('/api/projects', projectRouter);
 // Also mount on apiRouter
 apiRouter.use('/auth', authRouter);
 apiRouter.use('/projects', projectRouter);
+
 
 // Helper to safely extract JSON from Gemini text responses
 function extractJsonFromText(rawText: string): any {
@@ -1902,11 +3005,26 @@ app.use('/api', apiRouter);
 // Standalone health and status endpoints (without intercepting the frontend root '/')
 app.get(['/health', '/status'], handleHealthCheck);
 
-export { app, apiRouter };
+export { app, apiRouter, authRouter, projectRouter };
 
 // Export serverless handler for Vercel Serverless Functions
 export default function handler(req: any, res: any) {
-  return app(req, res);
+  try {
+    return app(req, res);
+  } catch (err: any) {
+    console.error('Fatal Serverless Handler Exception:', err);
+    if (!res.headersSent) {
+      res.statusCode = 500;
+      if (typeof res.setHeader === 'function') {
+        res.setHeader('Content-Type', 'application/json');
+      }
+      res.end(JSON.stringify({
+        success: false,
+        error: err?.message || 'Server error processing request',
+        fatal: true
+      }));
+    }
+  }
 }
 
 
