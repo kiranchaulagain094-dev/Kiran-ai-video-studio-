@@ -4,9 +4,9 @@ dotenv.config({ override: true });
 import cookieParser from 'cookie-parser';
 
 import { GoogleGenAI } from '@google/genai';
-import { attachUserMiddleware } from '../server/auth';
-import authRouter from '../server/routes/authRoutes';
-import projectRouter from '../server/routes/projectRoutes';
+import { attachUserMiddleware } from '../server/auth.ts';
+import authRouter from '../server/routes/authRoutes.ts';
+import projectRouter from '../server/routes/projectRoutes.ts';
 
 export const CURRENT_APP_VERSION = "1.1.0";
 export const APP_CHANGELOGS: Record<string, any> = {
@@ -219,6 +219,15 @@ app.use((req, res, next) => {
     req.url = `${matchedPath}${queryString}`;
   } else if (typeof forwarded === 'string' && forwarded.startsWith('/api')) {
     req.url = forwarded;
+  } else if (req.url && req.url.includes('_api_route=')) {
+    const match = req.url.match(/[?&]_api_route=([^&]+)/);
+    if (match) {
+      const cleanRoute = decodeURIComponent(match[1]).replace(/^\/+/, '');
+      const cleanUrl = req.url.replace(/([?&])_api_route=[^&]+(&|$)/, '$1').replace(/[?&]$/, '');
+      const queryIdx = cleanUrl.indexOf('?');
+      const extraQuery = queryIdx !== -1 ? cleanUrl.substring(queryIdx) : '';
+      req.url = `/api/${cleanRoute}${extraQuery}`;
+    }
   } else if (req.query && typeof req.query._api_route === 'string') {
     const cleanRoute = (req.query._api_route as string).replace(/^\/+/, '');
     const queryIndex = req.url.indexOf('?');

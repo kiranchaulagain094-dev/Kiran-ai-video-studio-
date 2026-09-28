@@ -1,4 +1,4 @@
-import { validateSession, extractSessionCredentials } from '../../server/auth';
+import { validateSession, extractSessionCredentials } from '../../server/auth.ts';
 
 export default async function handler(req: any, res: any) {
   try {

@@ -1,6 +1,6 @@
-import { extractSessionCredentials, validateSession } from '../../server/auth';
-import { query } from '../../server/db';
-import { Project, ProjectStatus } from '../../src/types';
+import { extractSessionCredentials, validateSession } from '../../server/auth.ts';
+import { query } from '../../server/db.ts';
+import type { Project, ProjectStatus } from '../../src/types/index.ts';
 
 function dbToFrontendStatus(dbStatus: string): ProjectStatus {
   switch (dbStatus?.toLowerCase()) {

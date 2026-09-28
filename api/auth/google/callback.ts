@@ -4,8 +4,8 @@ import {
   findOrCreateGoogleUser, 
   createUserSession, 
   setSessionCookie 
-} from '../../../server/auth';
-import { isDbConfigured } from '../../../server/db';
+} from '../../../server/auth.ts';
+import { isDbConfigured } from '../../../server/db.ts';
 
 export default async function handler(req: any, res: any) {
   const code = req.query?.code;
@@ -15,12 +15,14 @@ export default async function handler(req: any, res: any) {
   if (error) {
     const errorMsg = (errorDescription as string) || (error as string) || 'Authentication cancelled by user';
     console.warn('Google OAuth callback error:', errorMsg);
-    res.writeHead(302, { Location: `/?auth_error=${encodeURIComponent(errorMsg)}` });
+    res.statusCode = 302;
+    res.setHeader('Location', `/?auth_error=${encodeURIComponent(errorMsg)}`);
     return res.end();
   }
 
   if (!code || typeof code !== 'string') {
-    res.writeHead(302, { Location: '/?auth_error=missing_authorization_code' });
+    res.statusCode = 302;
+    res.setHeader('Location', '/?auth_error=missing_authorization_code');
     return res.end();
   }
 
@@ -32,7 +34,8 @@ export default async function handler(req: any, res: any) {
 
   if (missing.length > 0) {
     const errorMsg = `Server configuration error: missing ${missing.join(', ')} in Vercel environment variables.`;
-    res.writeHead(302, { Location: `/?auth_error=${encodeURIComponent(errorMsg)}` });
+    res.statusCode = 302;
+    res.setHeader('Location', `/?auth_error=${encodeURIComponent(errorMsg)}`);
     return res.end();
   }
 
@@ -43,12 +46,14 @@ export default async function handler(req: any, res: any) {
     const session = await createUserSession(user.id, req);
     setSessionCookie(res, session.cookieValue, req);
 
-    res.writeHead(302, { Location: '/?auth_success=1' });
+    res.statusCode = 302;
+    res.setHeader('Location', '/?auth_success=1');
     res.end();
   } catch (err: any) {
     console.error('Google OAuth callback processing error:', err);
     const message = err?.message || 'Authentication error. Please try again.';
-    res.writeHead(302, { Location: `/?auth_error=${encodeURIComponent(message)}` });
+    res.statusCode = 302;
+    res.setHeader('Location', `/?auth_error=${encodeURIComponent(message)}`);
     res.end();
   }
 }

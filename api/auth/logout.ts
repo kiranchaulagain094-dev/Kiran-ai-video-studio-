@@ -1,4 +1,4 @@
-import { revokeSession, clearSessionCookie, extractSessionCredentials } from '../../server/auth';
+import { revokeSession, clearSessionCookie, extractSessionCredentials } from '../../server/auth.ts';
 
 export default async function handler(req: any, res: any) {
   try {

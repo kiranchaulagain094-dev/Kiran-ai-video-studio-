@@ -1,8 +1,9 @@
-import express, { Request, Response } from 'express';
+import express from 'express';
+import type { Request, Response } from 'express';
 import crypto from 'crypto';
-import { requireAuth } from '../auth';
-import { query, isDbConfigured } from '../db';
-import { Project, ProjectStatus } from '../../src/types';
+import { requireAuth } from '../auth.ts';
+import { query, isDbConfigured } from '../db.ts';
+import type { Project, ProjectStatus } from '../../src/types/index.ts';
 
 const router = express.Router();
 

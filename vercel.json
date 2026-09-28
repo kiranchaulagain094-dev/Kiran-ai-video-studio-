@@ -1,14 +1,14 @@
 {
   "version": 2,
   "functions": {
-    "api/**": {
+    "api/**/*.ts": {
       "maxDuration": 60
     }
   },
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "/api"
+      "destination": "/api?_api_route=$1"
     },
     {
       "source": "/((?!api(?:/|$)).*)",

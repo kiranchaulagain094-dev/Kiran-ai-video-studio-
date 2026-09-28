@@ -1,3 +1,3 @@
-import callbackHandler from './google/callback';
+import callbackHandler from './google/callback.ts';
 
 export default callbackHandler;

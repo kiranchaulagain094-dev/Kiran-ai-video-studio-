@@ -1,6 +1,6 @@
 import crypto from 'crypto';
-import { Request, Response, NextFunction } from 'express';
-import { query, isDbConfigured } from './db';
+import type { Request, Response, NextFunction } from 'express';
+import { query, isDbConfigured } from './db.ts';
 
 export interface AuthUser {
   id: string;

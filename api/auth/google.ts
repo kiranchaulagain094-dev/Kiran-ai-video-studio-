@@ -1,5 +1,5 @@
-import { getGoogleAuthorizationUrl } from '../../server/auth';
-import { isDbConfigured } from '../../server/db';
+import { getGoogleAuthorizationUrl } from '../../server/auth.ts';
+import { isDbConfigured } from '../../server/db.ts';
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'GET') {
@@ -33,12 +33,14 @@ export default async function handler(req: any, res: any) {
     const state = typeof req.query?.state === 'string' ? req.query.state : undefined;
     const authUrl = getGoogleAuthorizationUrl(req, state);
 
-    res.writeHead(302, { Location: authUrl });
+    res.statusCode = 302;
+    res.setHeader('Location', authUrl);
     res.end();
   } catch (err: any) {
     console.error('Failed to initiate Google OAuth:', err);
     const message = err?.message || 'Failed to initiate Google OAuth authorization flow.';
-    res.writeHead(302, { Location: `/?auth_error=${encodeURIComponent(message)}` });
+    res.statusCode = 302;
+    res.setHeader('Location', `/?auth_error=${encodeURIComponent(message)}`);
     res.end();
   }
 }

@@ -1,4 +1,5 @@
-import express, { Request, Response } from 'express';
+import express from 'express';
+import type { Request, Response } from 'express';
 import { 
   isGoogleOAuthConfigured, 
   getGoogleAuthorizationUrl, 
@@ -9,8 +10,8 @@ import {
   setSessionCookie, 
   clearSessionCookie, 
   revokeSession 
-} from '../auth';
-import { isDbConfigured } from '../db';
+} from '../auth.ts';
+import { isDbConfigured } from '../db.ts';
 
 const router = express.Router();
 

@@ -1,5 +1,5 @@
-import { isGoogleOAuthConfigured } from '../../server/auth';
-import { isDbConfigured } from '../../server/db';
+import { isGoogleOAuthConfigured } from '../../server/auth.ts';
+import { isDbConfigured } from '../../server/db.ts';
 
 export default async function handler(req: any, res: any) {
   const googleOk = isGoogleOAuthConfigured();
