@@ -3,5 +3,6 @@ export {
   getDbClient,
   getDbPool,
   query,
-  initDbSchema
+  initDbSchema,
+  ensureUsersSchema
 } from '../api/index';

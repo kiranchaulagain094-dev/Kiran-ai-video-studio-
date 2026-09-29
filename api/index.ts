@@ -296,7 +296,13 @@ let initPromise: Promise<void> | null = null;
 
 export function isDbConfigured(): boolean {
   const url = process.env.DATABASE_URL;
-  return Boolean(url && url.trim().length > 0 && !url.includes('username:password'));
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim();
+  if (trimmed.length === 0) return false;
+  if (trimmed.includes('username:password')) return false;
+  // Must be a valid postgres URL
+  if (!trimmed.startsWith('postgres://') && !trimmed.startsWith('postgresql://')) return false;
+  return true;
 }
 
 export function getDbClient() {
@@ -314,6 +320,126 @@ export function getDbPool(): any {
   return getDbClient();
 }
 
+/**
+ * Ensures Neon/PostgreSQL users table and schema are safely migrated with all columns.
+ * Specifically adds the 'email' column with a unique partial index if missing.
+ */
+export async function ensureUsersSchema(force = false): Promise<void> {
+  if (isInitialized && !force) return;
+  if (!isDbConfigured()) return;
+
+  const sql = getDbClient();
+  if (!sql) return;
+
+  const migrationStatements = [
+    // 1. Ensure users table exists with primary key
+    `CREATE TABLE IF NOT EXISTS users (
+      id VARCHAR(64) PRIMARY KEY,
+      username VARCHAR(64) NOT NULL,
+      display_username VARCHAR(64) NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+    )`,
+
+    // 2. Add email column safely if missing (CRITICAL for Google OAuth)
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255)`,
+
+    // 3. Add OAuth provider columns
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(32) DEFAULT 'local'`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS provider_user_id VARCHAR(128)`,
+
+    // 4. Ensure password_hash is nullable (so OAuth users do not require a plaintext password)
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)`,
+    `ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL`,
+
+    // 5. Ensure role, status, avatar columns exist
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(32) DEFAULT 'user'`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'active'`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP`,
+
+    // 6. Create unique index on non-null emails (case-insensitive)
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users (LOWER(email)) WHERE email IS NOT NULL`,
+
+    // 7. Create unique index on Google/OAuth provider credentials
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_provider_id ON users (auth_provider, provider_user_id) WHERE provider_user_id IS NOT NULL`,
+
+    // 8. Unique index on lowercase username
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (LOWER(username))`,
+
+    // 9. User sessions table
+    `CREATE TABLE IF NOT EXISTS user_sessions (
+      id VARCHAR(128) PRIMARY KEY,
+      user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash VARCHAR(128) NOT NULL,
+      ip_address VARCHAR(45),
+      user_agent TEXT,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+      last_active_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON user_sessions(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON user_sessions(expires_at)`,
+
+    // 10. Projects table (User-Specific Application Data)
+    `CREATE TABLE IF NOT EXISTS projects (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title VARCHAR(255) NOT NULL,
+      description TEXT DEFAULT '',
+      type VARCHAR(64) DEFAULT 'YouTube Video' NOT NULL,
+      aspect_ratio VARCHAR(32) DEFAULT '16:9' NOT NULL,
+      duration VARCHAR(64) DEFAULT '60 seconds' NOT NULL,
+      status VARCHAR(32) DEFAULT 'draft' NOT NULL,
+      thumbnail_url TEXT,
+      video_url TEXT,
+      tags TEXT[] DEFAULT ARRAY['AI Video']::TEXT[],
+      scenes_count INTEGER DEFAULT 3 NOT NULL,
+      quality VARCHAR(64) DEFAULT '1080p Full HD',
+      script TEXT DEFAULT '',
+      scenes JSONB DEFAULT '[]'::JSONB,
+      style VARCHAR(64) DEFAULT 'Cinematic',
+      voice VARCHAR(64) DEFAULT 'Female',
+      language VARCHAR(64) DEFAULT 'English',
+      music VARCHAR(128) DEFAULT 'AI Background Music',
+      idea_prompt TEXT DEFAULT '',
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+    )`,
+
+    // 11. Add any missing project columns
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS style VARCHAR(64) DEFAULT 'Cinematic'`,
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS voice VARCHAR(64) DEFAULT 'Female'`,
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS language VARCHAR(64) DEFAULT 'English'`,
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS music VARCHAR(128) DEFAULT 'AI Background Music'`,
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS idea_prompt TEXT DEFAULT ''`,
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS scenes_count INTEGER DEFAULT 3`,
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS quality VARCHAR(64) DEFAULT '1080p Full HD'`,
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS script TEXT DEFAULT ''`,
+    `ALTER TABLE projects ADD COLUMN IF NOT EXISTS scenes JSONB DEFAULT '[]'::JSONB`,
+
+    `CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at DESC)`
+  ];
+
+  for (const ddl of migrationStatements) {
+    try {
+      await sql.query(ddl);
+    } catch (err: any) {
+      if (!err?.message?.includes('already exists') && !err?.message?.includes('duplicate')) {
+        console.warn(`[Neon Schema DDL Note] ${ddl.slice(0, 45)}...:`, err?.message || err);
+      }
+    }
+  }
+
+  isInitialized = true;
+}
+
+export async function initDbSchema(): Promise<void> {
+  await ensureUsersSchema(false);
+}
+
 export async function query<T = any>(text: string, params?: any[]): Promise<T[]> {
   if (!isDbConfigured()) {
     throw new Error('Database is not configured. DATABASE_URL environment variable is required.');
@@ -323,7 +449,6 @@ export async function query<T = any>(text: string, params?: any[]): Promise<T[]>
     if (!initPromise) {
       initPromise = initDbSchema().catch((err) => {
         console.warn('Schema initialization note:', err?.message || err);
-        isInitialized = true;
       });
     }
     await initPromise;
@@ -341,94 +466,18 @@ export async function query<T = any>(text: string, params?: any[]): Promise<T[]>
       return (await sql.query(text)) as T[];
     }
   } catch (err: any) {
+    // Self-healing: if error says column "email" or another column does not exist, trigger schema migration and retry once
+    if (err?.message && (err.message.includes('column "email" does not exist') || err.message.includes('column "auth_provider" does not exist'))) {
+      console.warn('Missing column detected in users table. Executing safe live schema migration...');
+      await ensureUsersSchema(true);
+      if (params && params.length > 0) {
+        return (await sql.query(text, params)) as T[];
+      } else {
+        return (await sql.query(text)) as T[];
+      }
+    }
     console.error('Neon database query error:', err?.message || err);
     throw err;
-  }
-}
-
-export async function initDbSchema(): Promise<void> {
-  if (isInitialized) return;
-  if (!isDbConfigured()) return;
-
-  const sql = getDbClient();
-  if (!sql) return;
-
-  try {
-    await sql.query(`
-      DO $$ BEGIN
-        CREATE TYPE user_role AS ENUM ('user', 'admin');
-      EXCEPTION WHEN duplicate_object THEN null; END $$;
-
-      DO $$ BEGIN
-        CREATE TYPE user_status AS ENUM ('active', 'suspended');
-      EXCEPTION WHEN duplicate_object THEN null; END $$;
-
-      DO $$ BEGIN
-        CREATE TYPE project_status AS ENUM ('draft', 'in_progress', 'rendered', 'ready', 'completed');
-      EXCEPTION WHEN duplicate_object THEN null; END $$;
-    `).catch(() => {});
-
-    await sql.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id VARCHAR(64) PRIMARY KEY,
-        username VARCHAR(64) NOT NULL,
-        display_username VARCHAR(64) NOT NULL,
-        email VARCHAR(255),
-        auth_provider VARCHAR(32) DEFAULT 'local' NOT NULL,
-        provider_user_id VARCHAR(128),
-        password_hash VARCHAR(255),
-        role user_role DEFAULT 'user' NOT NULL,
-        status user_status DEFAULT 'active' NOT NULL,
-        avatar TEXT,
-        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
-      );
-
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(32) DEFAULT 'local';
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS provider_user_id VARCHAR(128);
-      ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255);
-      ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
-    `).catch(() => {});
-
-    await sql.query(`
-      CREATE TABLE IF NOT EXISTS user_sessions (
-        id VARCHAR(128) PRIMARY KEY,
-        user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        token_hash VARCHAR(128) NOT NULL,
-        ip_address VARCHAR(45),
-        user_agent TEXT,
-        expires_at TIMESTAMPTZ NOT NULL,
-        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        last_active_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
-      );
-    `).catch(() => {});
-
-    await sql.query(`
-      CREATE TABLE IF NOT EXISTS projects (
-        id VARCHAR(64) PRIMARY KEY,
-        user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        title VARCHAR(255) NOT NULL,
-        description TEXT DEFAULT '',
-        type VARCHAR(64) DEFAULT 'YouTube Video' NOT NULL,
-        aspect_ratio VARCHAR(32) DEFAULT '16:9' NOT NULL,
-        duration VARCHAR(64) DEFAULT '60 seconds' NOT NULL,
-        status project_status DEFAULT 'draft' NOT NULL,
-        thumbnail_url TEXT,
-        video_url TEXT,
-        tags TEXT[] DEFAULT ARRAY['AI Video']::TEXT[],
-        scenes_count INTEGER DEFAULT 3 NOT NULL,
-        quality VARCHAR(64) DEFAULT '1080p Full HD',
-        script TEXT DEFAULT '',
-        scenes JSONB DEFAULT '[]'::JSONB,
-        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
-        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
-      );
-    `).catch(() => {});
-
-    isInitialized = true;
-  } catch (err) {
-    console.warn('Schema verification note:', err);
-    isInitialized = true;
   }
 }
 
@@ -672,60 +721,125 @@ export async function findOrCreateGoogleUser(profile: {
     throw new Error('Database is not configured. DATABASE_URL is required to persist users.');
   }
 
-  const existing = await query<any>(
-    `SELECT id, username, display_username, email, role, status, avatar, auth_provider 
-     FROM users 
-     WHERE (auth_provider = 'google' AND provider_user_id = $1)
-        OR (email IS NOT NULL AND LOWER(email) = LOWER($2))
-     LIMIT 1`,
-    [profile.sub, profile.email]
-  );
+  // Ensure users table schema is completely migrated with email and indexes
+  await ensureUsersSchema();
 
-  if (existing && existing.length > 0) {
-    const user = existing[0];
-    if (profile.picture && profile.picture !== user.avatar) {
-      await query(
-        `UPDATE users 
-         SET avatar = $1, display_username = COALESCE(display_username, $2), auth_provider = 'google', provider_user_id = $3, updated_at = CURRENT_TIMESTAMP 
-         WHERE id = $4`,
-        [profile.picture, profile.name || user.display_username, profile.sub, user.id]
-      ).catch(() => {});
-      user.avatar = profile.picture;
-    }
-
-    return {
-      id: user.id,
-      username: user.username,
-      display_username: user.display_username || user.username,
-      email: user.email,
-      role: user.role || 'user',
-      status: user.status || 'active',
-      avatar: user.avatar,
-      auth_provider: user.auth_provider || 'google'
-    };
-  }
-
-  const newUserId = `usr_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-  const cleanEmail = profile.email.toLowerCase().trim();
-  const baseUsername = cleanEmail.split('@')[0].replace(/[^a-z0-9_]/g, '').slice(0, 20) || 'creator';
-  const uniqueUsername = `${baseUsername}_${Math.floor(1000 + Math.random() * 9000)}`;
-  const displayName = profile.name || cleanEmail.split('@')[0];
+  const cleanEmail = (profile.email || '').toLowerCase().trim();
+  const providerUserId = profile.sub;
+  const displayName = (profile.name || cleanEmail.split('@')[0] || 'Creator').trim();
   const avatar = profile.picture || null;
   const isAdmin = cleanEmail === 'kiranchaulagain094@gmail.com';
   const role = isAdmin ? 'admin' : 'user';
 
-  await query(
-    `INSERT INTO users (
-      id, username, display_username, email, auth_provider, provider_user_id, password_hash, role, status, avatar
-    ) VALUES ($1, $2, $3, $4, 'google', $5, NULL, $6, 'active', $7)`,
-    [newUserId, uniqueUsername, displayName, cleanEmail, profile.sub, role, avatar]
-  );
+  // 1. Check if user already exists by Google provider_user_id or email
+  let existingUser: any = null;
+  try {
+    const existing = await query<any>(
+      `SELECT id, username, display_username, email, role, status, avatar, auth_provider 
+       FROM users 
+       WHERE (auth_provider = 'google' AND provider_user_id = $1)
+          OR (email IS NOT NULL AND LOWER(email) = LOWER($2))
+       LIMIT 1`,
+      [providerUserId, cleanEmail]
+    );
+
+    if (existing && existing.length > 0) {
+      existingUser = existing[0];
+    }
+  } catch (err: any) {
+    if (err?.message && err.message.includes('column "email" does not exist')) {
+      await ensureUsersSchema(true);
+      const retry = await query<any>(
+        `SELECT id, username, display_username, email, role, status, avatar, auth_provider 
+         FROM users 
+         WHERE (auth_provider = 'google' AND provider_user_id = $1)
+            OR (email IS NOT NULL AND LOWER(email) = LOWER($2))
+         LIMIT 1`,
+        [providerUserId, cleanEmail]
+      );
+      if (retry && retry.length > 0) {
+        existingUser = retry[0];
+      }
+    } else {
+      throw err;
+    }
+  }
+
+  if (existingUser) {
+    // Update avatar, display name, and provider details if changed
+    try {
+      await query(
+        `UPDATE users 
+         SET avatar = COALESCE($1, avatar),
+             display_username = COALESCE(display_username, $2),
+             email = COALESCE(email, $3),
+             auth_provider = 'google',
+             provider_user_id = COALESCE(provider_user_id, $4),
+             updated_at = CURRENT_TIMESTAMP 
+         WHERE id = $5`,
+        [avatar, displayName, cleanEmail || null, providerUserId, existingUser.id]
+      );
+    } catch (updateErr: any) {
+      console.warn('User update note:', updateErr?.message);
+    }
+
+    return {
+      id: existingUser.id,
+      username: existingUser.username,
+      display_username: existingUser.display_username || displayName || existingUser.username,
+      email: cleanEmail || existingUser.email,
+      role: existingUser.role || role,
+      status: existingUser.status || 'active',
+      avatar: avatar || existingUser.avatar,
+      auth_provider: 'google'
+    };
+  }
+
+  // 2. Create new user in Neon
+  const newUserId = `usr_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+  const baseUsername = cleanEmail
+    ? cleanEmail.split('@')[0].replace(/[^a-z0-9_]/g, '').slice(0, 20)
+    : 'creator';
+  const uniqueUsername = `${baseUsername || 'creator'}_${Math.floor(1000 + Math.random() * 9000)}`;
+
+  try {
+    await query(
+      `INSERT INTO users (
+        id, username, display_username, email, auth_provider, provider_user_id, password_hash, role, status, avatar
+      ) VALUES ($1, $2, $3, $4, 'google', $5, NULL, $6, 'active', $7)`,
+      [newUserId, uniqueUsername, displayName, cleanEmail || null, providerUserId, role, avatar]
+    );
+  } catch (insertErr: any) {
+    // In case of concurrent insert race condition, retrieve the newly inserted record
+    const retryFind = await query<any>(
+      `SELECT id, username, display_username, email, role, status, avatar, auth_provider 
+       FROM users 
+       WHERE (auth_provider = 'google' AND provider_user_id = $1)
+          OR (email IS NOT NULL AND LOWER(email) = LOWER($2))
+       LIMIT 1`,
+      [providerUserId, cleanEmail]
+    );
+    if (retryFind && retryFind.length > 0) {
+      const u = retryFind[0];
+      return {
+        id: u.id,
+        username: u.username,
+        display_username: u.display_username || displayName || u.username,
+        email: cleanEmail || u.email,
+        role: u.role || role,
+        status: u.status || 'active',
+        avatar: avatar || u.avatar,
+        auth_provider: 'google'
+      };
+    }
+    throw insertErr;
+  }
 
   return {
     id: newUserId,
     username: uniqueUsername,
     display_username: displayName,
-    email: cleanEmail,
+    email: cleanEmail || null,
     role,
     status: 'active',
     avatar,
