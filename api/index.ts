@@ -530,23 +530,40 @@ export function getBaseUrl(req: any): string {
   return 'http://localhost:3000';
 }
 
+export function cleanEnvValue(val?: string | null): string {
+  if (!val) return '';
+  let cleaned = String(val).trim();
+  // Strip enclosing double quotes, single quotes, or backticks (common copy-paste issue into Vercel/env)
+  cleaned = cleaned.replace(/^["'`]+|["'`]+$/g, '').trim();
+  // Strip any trailing carriage returns, newlines, tabs, or non-printable chars
+  cleaned = cleaned.replace(/[\r\n\t]/g, '').trim();
+  return cleaned;
+}
+
+export function getCleanGoogleClientId(): string {
+  const raw = process.env.GOOGLE_CLIENT_ID || process.env.AUTH_GOOGLE_ID || process.env.GOOGLE_ID || '';
+  return cleanEnvValue(raw);
+}
+
+export function getCleanGoogleClientSecret(): string {
+  const raw = process.env.GOOGLE_CLIENT_SECRET || process.env.AUTH_GOOGLE_SECRET || process.env.GOOGLE_SECRET || '';
+  return cleanEnvValue(raw);
+}
+
 export function getGoogleRedirectUri(req: any): string {
   return `${getBaseUrl(req)}/api/auth/google/callback`;
 }
 
 export function isGoogleOAuthConfigured(): boolean {
-  return Boolean(
-    process.env.GOOGLE_CLIENT_ID &&
-    process.env.GOOGLE_CLIENT_SECRET &&
-    process.env.GOOGLE_CLIENT_ID.trim().length > 0 &&
-    process.env.GOOGLE_CLIENT_SECRET.trim().length > 0
-  );
+  const id = getCleanGoogleClientId();
+  const secret = getCleanGoogleClientSecret();
+  return id.length > 0 && secret.length > 0;
 }
 
 export function getGoogleAuthorizationUrl(req: any, state?: string): string {
-  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
+  const clientId = getCleanGoogleClientId();
   if (!clientId) {
-    throw new Error('GOOGLE_CLIENT_ID is not configured in environment variables.');
+    throw new Error('GOOGLE_CLIENT_ID is not configured in server environment variables.');
   }
 
   const redirectUri = getGoogleRedirectUri(req);
@@ -572,34 +589,59 @@ export async function exchangeGoogleCodeForUser(code: string, redirectUri: strin
   picture: string;
   email_verified: boolean;
 }> {
-  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+  const clientId = getCleanGoogleClientId();
+  const clientSecret = getCleanGoogleClientSecret();
 
   if (!clientId || !clientSecret) {
-    throw new Error('Google OAuth credentials (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET) are missing.');
+    throw new Error('Google OAuth credentials (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET) are missing or empty in environment.');
   }
+
+  // Explicit URL-encoded form parameters
+  const bodyParams = new URLSearchParams({
+    code: code.trim(),
+    client_id: clientId,
+    client_secret: clientSecret,
+    redirect_uri: redirectUri.trim(),
+    grant_type: 'authorization_code'
+  });
 
   const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      code,
-      client_id: clientId,
-      client_secret: clientSecret,
-      redirect_uri: redirectUri,
-      grant_type: 'authorization_code'
-    })
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Accept': 'application/json',
+      'User-Agent': 'Kiran-AI-Video-Studio-OAuth/1.1'
+    },
+    body: bodyParams.toString()
   });
 
   if (!tokenRes.ok) {
     const errorData = await tokenRes.text();
-    console.error('Google token exchange failed:', errorData);
+    console.error('Google token exchange failed HTTP', tokenRes.status, ':', errorData);
     let detail = `HTTP ${tokenRes.status}`;
+    let isSecretInvalid = false;
     try {
       const parsed = JSON.parse(errorData);
-      if (parsed.error_description) detail = parsed.error_description;
-      else if (parsed.error) detail = parsed.error;
+      if (parsed.error_description) {
+        detail = parsed.error_description;
+        if (detail.toLowerCase().includes('client secret') || parsed.error === 'invalid_client') {
+          isSecretInvalid = true;
+        }
+      } else if (parsed.error) {
+        detail = parsed.error;
+      }
     } catch {}
+
+    if (isSecretInvalid) {
+      const projectMatch = clientId.match(/^(\d+)-/);
+      const projectNum = projectMatch ? projectMatch[1] : null;
+      const projectNote = projectNum ? ` for Google Cloud Project #${projectNum}` : '';
+      throw new Error(
+        `Google token exchange error: The provided client secret is invalid for Client ID "${clientId}". ` +
+        `Please ensure GOOGLE_CLIENT_SECRET in your Vercel project environment variables matches the Web Application Client Secret${projectNote} in Google Cloud Console Credentials.`
+      );
+    }
+
     throw new Error(`Google token exchange error: ${detail}`);
   }
 
@@ -907,14 +949,34 @@ const authRouter = express.Router();
 
 authRouter.get(['/config', '/auth/config', '/api/auth/config'], (req: Request, res: Response) => {
   try {
+    const clientId = getCleanGoogleClientId();
+    const rawSecret = process.env.GOOGLE_CLIENT_SECRET || process.env.AUTH_GOOGLE_SECRET || process.env.GOOGLE_SECRET || '';
+    const cleanSecret = getCleanGoogleClientSecret();
     const googleOk = isGoogleOAuthConfigured();
     const dbOk = isDbConfigured();
+
+    const clientProjectMatch = clientId.match(/^(\d+)-/);
+    const projectNumber = clientProjectMatch ? clientProjectMatch[1] : (clientId.length <= 15 ? clientId : null);
+    const callbackUri = getGoogleRedirectUri(req);
+    const hasQuotesInSecret = rawSecret.length > cleanSecret.length && (rawSecret.startsWith('"') || rawSecret.startsWith("'") || rawSecret.startsWith('`'));
 
     res.json({
       success: true,
       isConfigured: googleOk && dbOk,
       googleOAuth: googleOk,
       database: dbOk,
+      oauthDiagnostics: {
+        hasClientId: clientId.length > 0,
+        clientIdPreview: clientId ? (clientId.length > 25 ? `${clientId.slice(0, 10)}...${clientId.slice(-18)}` : clientId) : null,
+        clientIdValidWebFormat: clientId.endsWith('.apps.googleusercontent.com'),
+        googleCloudProjectNumber: projectNumber,
+        hasClientSecret: cleanSecret.length > 0,
+        clientSecretLength: cleanSecret.length,
+        clientSecretPrefix: cleanSecret ? (cleanSecret.startsWith('GOCSPX-') ? 'GOCSPX-' : 'Custom') : null,
+        clientSecretHasSurroundingQuotesInEnv: hasQuotesInSecret,
+        configuredCallbackUrl: callbackUri,
+        requiredGoogleConsoleAuthorizedRedirectUri: callbackUri
+      },
       configuredEnvVars: {
         hasClientId: Boolean(process.env.GOOGLE_CLIENT_ID),
         hasClientSecret: Boolean(process.env.GOOGLE_CLIENT_SECRET),
@@ -937,10 +999,13 @@ authRouter.get(['/config', '/auth/config', '/api/auth/config'], (req: Request, r
 authRouter.get(['/google', '/auth/google', '/api/auth/google'], (req: Request, res: Response) => {
   try {
     const missing: string[] = [];
-    if (!process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID.trim().length === 0) {
+    const clientId = getCleanGoogleClientId();
+    const clientSecret = getCleanGoogleClientSecret();
+
+    if (!clientId || clientId.length === 0) {
       missing.push('GOOGLE_CLIENT_ID');
     }
-    if (!process.env.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET.trim().length === 0) {
+    if (!clientSecret || clientSecret.length === 0) {
       missing.push('GOOGLE_CLIENT_SECRET');
     }
     if (!isDbConfigured()) {
@@ -986,8 +1051,11 @@ authRouter.get(['/google/callback', '/auth/google/callback', '/api/auth/google/c
   }
 
   const missing: string[] = [];
-  if (!process.env.GOOGLE_CLIENT_ID) missing.push('GOOGLE_CLIENT_ID');
-  if (!process.env.GOOGLE_CLIENT_SECRET) missing.push('GOOGLE_CLIENT_SECRET');
+  const clientId = getCleanGoogleClientId();
+  const clientSecret = getCleanGoogleClientSecret();
+
+  if (!clientId) missing.push('GOOGLE_CLIENT_ID');
+  if (!clientSecret) missing.push('GOOGLE_CLIENT_SECRET');
   if (!isDbConfigured()) missing.push('DATABASE_URL');
 
   if (missing.length > 0) {
