@@ -7,7 +7,8 @@ import {
   VideoScene,
   AIGuideResponse,
   OneMinuteTimelinePlan,
-  OneMinuteTimelineScene
+  OneMinuteTimelineScene,
+  AppVersionResponse
 } from '../types';
 
 import { INITIAL_PROJECTS, INITIAL_TEMPLATES } from '../data/mockData';
@@ -412,9 +413,9 @@ export class StudioApiService {
     return await res.json();
   }
 
-  static async checkAppVersion(): Promise<{ version: string; releaseDate: string; changelog: any } | null> {
+  static async checkAppVersion(clientVersion: string = '1.1.0'): Promise<AppVersionResponse | null> {
     try {
-      const res = await fetch('/api/version?_t=' + Date.now(), {
+      const res = await fetch(`/api/app/version?clientVersion=${encodeURIComponent(clientVersion)}&_t=${Date.now()}`, {
         cache: 'no-store',
         headers: { 'Accept': 'application/json' }
       });

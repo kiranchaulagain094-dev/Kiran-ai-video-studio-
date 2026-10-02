@@ -33,10 +33,12 @@ export const ContactUs: React.FC<ContactUsProps> = ({ onNavigate }) => {
     message: ''
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [submittedMessage, setSubmittedMessage] = useState<{
     ticketId: string;
     name: string;
     subject: string;
+    messageText?: string;
   } | null>(null);
 
   const handleCopy = (text: string, id: string) => {
@@ -45,19 +47,57 @@ export const ContactUs: React.FC<ContactUsProps> = ({ onNavigate }) => {
     setTimeout(() => setCopied(null), 2000);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name || !formData.email || !formData.message) return;
+    setSubmitError(null);
+
+    const cleanName = formData.name.trim();
+    const cleanEmail = formData.email.trim();
+    const cleanMessage = formData.message.trim();
+
+    if (!cleanName) {
+      setSubmitError('Please enter your full name.');
+      return;
+    }
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setSubmitError('Please enter a valid email address.');
+      return;
+    }
+    if (cleanMessage.length < 10) {
+      setSubmitError('Please write a message with at least 10 characters.');
+      return;
+    }
 
     setIsSubmitting(true);
-    // Simulate swift submission and receipt generation
-    setTimeout(() => {
-      setIsSubmitting(false);
-      setSubmittedMessage({
-        ticketId: `KV-${Math.floor(100000 + Math.random() * 900000)}`,
-        name: formData.name,
-        subject: formData.subject || 'Studio Inquiry'
+    try {
+      const res = await fetch('/api/contact', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          name: cleanName,
+          email: cleanEmail,
+          category: formData.category,
+          subject: formData.subject.trim() || 'Studio Inquiry',
+          message: cleanMessage
+        })
       });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to submit inquiry. Please try again.');
+      }
+
+      setSubmittedMessage({
+        ticketId: data.ticketId || `KV-${Math.floor(100000 + Math.random() * 900000)}`,
+        name: cleanName,
+        subject: formData.subject.trim() || 'Studio Inquiry',
+        messageText: data.message
+      });
+
       setFormData({
         name: '',
         email: '',
@@ -65,7 +105,12 @@ export const ContactUs: React.FC<ContactUsProps> = ({ onNavigate }) => {
         subject: '',
         message: ''
       });
-    }, 600);
+    } catch (err: any) {
+      console.error('Contact form submission error:', err);
+      setSubmitError(err.message || 'Unable to submit your inquiry at this moment. Please email kiranchaulagain094@gmail.com directly.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const faqItems = [
@@ -224,6 +269,12 @@ export const ContactUs: React.FC<ContactUsProps> = ({ onNavigate }) => {
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="p-5 sm:p-6 rounded-2xl bg-[#111520] border border-white/10 space-y-4">
+            {submitError && (
+              <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                <span>{submitError}</span>
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">

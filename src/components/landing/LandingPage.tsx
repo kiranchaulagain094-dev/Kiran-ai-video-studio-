@@ -24,6 +24,7 @@ import {
 import { Footer } from '../common/Footer';
 import { CORE_15_CREATOR_GUIDES } from '../../data/creatorGuides';
 import { AdSenseSafeContainer } from '../common/AdSenseSafeContainer';
+import { WhatsNewBanner } from '../home/WhatsNewBanner';
 
 interface LandingPageProps {
   onStartCreating: () => void;
@@ -196,7 +197,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
     },
     {
       q: 'How does the AI assistant generate scripts and metadata?',
-      a: 'The studio uses Google Gemini API models hosted on a secure backend to analyze your video concept and generate organized text structures (such as scene breakdowns, script dialogue, and SEO keyword analyses). If server limits are reached, the studio smoothly switches to local programmatic templates so you can always continue working.'
+      a: 'The studio uses advanced AI models to analyze your video concept and generate organized text structures, including scene breakdowns, script dialogue, editing timelines, and SEO metadata.'
     },
     {
       q: 'Who owns the scripts, screenplays, and metadata I create?',
@@ -204,7 +205,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
     },
     {
       q: 'Where are my projects and saved drafts stored?',
-      a: 'Your projects are saved in your web browser using HTML5 local storage. We do not store your drafts or personal data on remote tracking servers. If you clear your browser cache, your locally stored drafts will be reset.'
+      a: 'Your projects are saved securely in your creator workspace. When signed in, your projects synchronize seamlessly across your devices so you can pick up where you left off anytime.'
     },
     {
       q: 'How can I report a bug or suggest a feature?',
@@ -214,8 +215,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
   return (
     <div className="min-h-screen bg-[#090b10] text-slate-100 flex flex-col">
+      {/* What's New Announcement Banner (Database-driven for logged-in users) */}
+      <div className="pt-6">
+        <WhatsNewBanner onNavigateTo={onSelectFeature} />
+      </div>
+
       {/* Hero Section */}
-      <section className="relative pt-12 pb-16 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto text-center">
+      <section className="relative pt-6 pb-16 px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto text-center">
         {/* Subtle background glow */}
         <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[550px] h-[300px] bg-gradient-to-tr from-indigo-600/15 via-violet-600/15 to-cyan-500/10 rounded-full blur-[100px] pointer-events-none" />
 
@@ -237,7 +243,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
         {/* Transparent Description */}
         <p className="max-w-2xl mx-auto mt-4 text-sm sm:text-base text-slate-400 leading-relaxed">
-          A transparent creative suite built by Kiran Chaulagain. Structure multi-scene screenplays, 9:16 vertical hook sequences, thumbnail compositions, and evidence-based YouTube metadata—directly in your browser with zero required signup.
+          A creator suite built by Kiran Chaulagain. Structure multi-scene screenplays, 9:16 vertical hook sequences, thumbnail compositions, editing templates, and evidence-based YouTube metadata.
         </p>
 
         {/* Direct Action Buttons */}
@@ -273,9 +279,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         {/* Feature Highlights Pills */}
         <div className="mt-10 flex flex-wrap items-center justify-center gap-2 text-xs text-slate-400">
           <span className="px-3 py-1 rounded-full bg-white/5 border border-white/5">✓ 100% Free to Use</span>
-          <span className="px-3 py-1 rounded-full bg-white/5 border border-white/5">✓ No Sign-up Required</span>
-          <span className="px-3 py-1 rounded-full bg-white/5 border border-white/5">✓ Browser Local Storage</span>
-          <span className="px-3 py-1 rounded-full bg-white/5 border border-white/5">✓ Realistic SEO Scoring</span>
+          <span className="px-3 py-1 rounded-full bg-white/5 border border-white/5">✓ Ready to Create</span>
+          <span className="px-3 py-1 rounded-full bg-white/5 border border-white/5">✓ Your Projects are Saved Securely</span>
+          <span className="px-3 py-1 rounded-full bg-white/5 border border-white/5">✓ Evidence-Based SEO Scoring</span>
         </div>
 
         {/* AI Website Guide Callout Box */}

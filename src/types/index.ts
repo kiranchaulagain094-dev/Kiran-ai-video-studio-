@@ -169,17 +169,86 @@ export interface VideoTemplate {
   status: 'published' | 'draft';
 }
 
+export interface TemplateSlotMetadata {
+  slotIndex: number;
+  label: string;
+  type?: 'photo' | 'video' | 'any';
+  duration?: string;
+  suggested?: string;
+}
+
+export interface DbTemplate {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  aspect_ratio: string;
+  duration: string;
+  duration_seconds: number;
+  media_slots: number;
+  slots_metadata: TemplateSlotMetadata[];
+  thumbnail_url: string;
+  preview_video_url?: string;
+  is_published: boolean;
+  is_featured: boolean;
+  usage_count: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface StudioUpdate {
+  id: string;
+  version?: string;
+  minimum_supported_version?: string;
+  title: string;
+  description: string;
+  release_notes?: string;
+  tag?: string;
+  image_url?: string | null;
+  button_text?: string;
+  button_link?: string;
+  scheduled_at?: string | null;
+  timezone?: string;
+  is_required?: boolean;
+  requires_sign_in?: boolean;
+  is_featured?: boolean;
+  status?: 'draft' | 'scheduled' | 'published' | 'unpublished';
+  is_published: boolean;
+  is_pinned: boolean;
+  published_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AppVersionResponse {
+  currentVersion: string;
+  latestVersion: string;
+  minimumSupportedVersion: string;
+  updateAvailable: boolean;
+  updateRequired: boolean;
+  updateTitle?: string;
+  updateDescription?: string;
+  releaseNotes?: string;
+  requiresSignIn?: boolean;
+  updateUrl?: string;
+}
+
 export type TemplateCategory =
+  | 'Trending'
+  | 'Beat Sync'
+  | 'Photo Transition'
+  | 'Love'
+  | 'Birthday'
+  | 'Travel'
+  | 'DJ'
+  | 'Emotional'
+  | 'Festival'
+  | 'Shorts'
+  | 'TikTok Style'
+  | 'Reels Style'
   | 'Romantic Video'
   | 'Music Video'
-  | 'YouTube Shorts'
-  | 'Motivational Story'
-  | 'Business Ad'
-  | 'Product Promo'
-  | 'Cinematic Travel'
-  | 'News / Explainer'
-  | 'Nepali Folk / Modern Song Concept'
-  | 'DJ Remix Visualizer';
+  | 'YouTube Shorts';
 
 export interface RecommendedTool {
   id: string;

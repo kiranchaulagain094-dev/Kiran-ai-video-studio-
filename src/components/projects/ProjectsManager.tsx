@@ -15,7 +15,6 @@ import {
   Check, 
   X,
   ExternalLink,
-  Database,
   ShieldCheck,
   Lock,
   Sparkles
@@ -117,21 +116,21 @@ export const ProjectsManager: React.FC<ProjectsManagerProps> = ({
         <div className="p-4 rounded-2xl bg-gradient-to-r from-cyan-950/40 via-indigo-950/30 to-[#0f1320] border border-cyan-500/30 flex flex-wrap items-center justify-between gap-3 text-xs shadow-lg">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
-              <Database className="w-4 h-4" />
+              <FolderGit2 className="w-4 h-4" />
             </div>
             <div>
               <div className="font-semibold text-white flex items-center gap-1.5">
-                <span>Neon PostgreSQL Cloud Sync Active</span>
+                <span>Your Projects are safely saved</span>
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
               </div>
               <div className="text-[11px] text-slate-400">
-                User account: <span className="text-cyan-300 font-medium">{user.display_username}</span> ({user.email || user.username}) • User ID: <span className="font-mono text-slate-300">{user.id}</span>
+                Connected account: <span className="text-cyan-300 font-medium">{user.display_username}</span> ({user.email || user.username}) • Cloud Sync Active
               </div>
             </div>
           </div>
           <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[11px] font-mono">
             <ShieldCheck className="w-3.5 h-3.5" />
-            <span>Strict User Isolation</span>
+            <span>Encrypted Cloud Storage</span>
           </div>
         </div>
       ) : (
@@ -145,7 +144,7 @@ export const ProjectsManager: React.FC<ProjectsManagerProps> = ({
                 Enable Cloud Storage & Multi-Device Sync
               </div>
               <p className="text-xs text-slate-400 max-w-xl">
-                Sign in with Google to store your video projects in <strong>Neon PostgreSQL</strong>, prevent data loss, and access your creations from any device.
+                Sign in with Google to safely save your video projects to the cloud, prevent data loss, and access your creations from any device.
               </p>
             </div>
           </div>

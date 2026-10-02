@@ -48,12 +48,12 @@ I will understand your goal, explain which real tools in our studio can help, an
 };
 
 const SUGGESTED_PROMPTS = [
-  { label: 'I want to make a YouTube video', icon: Video },
-  { label: 'mero song ko lagi title ra description chahiyo', icon: Sparkles },
-  { label: 'I need a thumbnail idea', icon: ImageIcon },
-  { label: 'Help me with YouTube SEO', icon: Sparkles },
-  { label: 'Shorts / Reels vertical video banaune kasari?', icon: Film },
-  { label: 'Multi-scene documentary script for Nepal tourism', icon: Compass }
+  { label: 'YouTube ko thumbnail kasari ramro banaune?', icon: ImageIcon },
+  { label: 'SEO title banaideu', icon: Sparkles },
+  { label: 'Yo video ko description bana', icon: Sparkles },
+  { label: 'AI bata Shorts banauna k garnu?', icon: Film },
+  { label: 'Multi-scene documentary script for Nepal tourism', icon: Compass },
+  { label: 'I want to make a complete YouTube video', icon: Video }
 ];
 
 export const AIWebsiteGuide: React.FC<AIWebsiteGuideProps> = ({ onNavigate }) => {
@@ -103,12 +103,10 @@ export const AIWebsiteGuide: React.FC<AIWebsiteGuideProps> = ({ onNavigate }) =>
 
   const handleClearChat = () => {
     if (messages.length > 1) {
-      if (window.confirm('Clear conversation history in this browser?')) {
-        const reset = [{ ...INITIAL_GREETING_MESSAGE, timestamp: new Date().toISOString() }];
-        setMessages(reset);
-        localStorage.removeItem(STORAGE_KEY);
-        setError(null);
-      }
+      const reset = [{ ...INITIAL_GREETING_MESSAGE, timestamp: new Date().toISOString() }];
+      setMessages(reset);
+      localStorage.removeItem(STORAGE_KEY);
+      setError(null);
     }
   };
 

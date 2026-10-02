@@ -148,10 +148,10 @@ export const AboutUs: React.FC<AboutUsProps> = ({ onNavigate }) => {
           4. How the AI Works
         </h2>
         <p className="text-slate-300 leading-relaxed text-sm">
-          When you enter a concept or title, our server communicates securely with state-of-the-art Google Gemini language models to generate contextual screenplays, search-optimized metadata, and visual suggestions. If external network connectivity or API quotas encounter transient constraints, intelligent algorithmic studio fallbacks ensure you still receive a fully formatted, production-ready template.
+          When you enter a concept or title, our studio uses advanced language models to generate contextual screenplays, search-optimized metadata, and visual suggestions. Intelligent studio systems ensure you always receive a fully formatted, production-ready result.
         </p>
         <p className="text-slate-300 leading-relaxed text-sm">
-          All API communications occur server-to-server. No private API keys or sensitive credentials are ever sent to your browser.
+          All communications are processed securely with enterprise-grade privacy protection.
         </p>
       </section>
 

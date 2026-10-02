@@ -67,8 +67,8 @@ export const PrivacyPolicy: React.FC<PrivacyPolicyProps> = ({ onNavigate }) => {
               When you use our creative tools, you input prompts, story ideas, scripts, timeline cuts, and metadata.
             </p>
             <ul className="list-disc list-inside space-y-1 text-slate-300 text-sm mt-2 ml-2">
-              <li><strong>Project Drafts:</strong> Saved locally in your browser's <code className="text-indigo-300">localStorage</code> so you can resume work without loss.</li>
-              <li><strong>Local Storage Only:</strong> All project drafts, scene breakdowns, timeline cuts, and metadata are saved strictly inside your web browser's <code className="text-indigo-300">localStorage</code>. We do not store your creative projects or scripts on a remote database server.</li>
+              <li><strong>Project Drafts:</strong> Saved securely so you can resume your creative work without loss.</li>
+              <li><strong>Workspace Storage:</strong> When signed in with Google, your projects synchronize securely to your private creator workspace.</li>
               <li><strong>AI Generation Inputs:</strong> Prompts submitted to the AI Video Planner or Content Assistant are processed to generate storyboard outlines and SEO tags.</li>
             </ul>
           </div>
@@ -76,19 +76,19 @@ export const PrivacyPolicy: React.FC<PrivacyPolicyProps> = ({ onNavigate }) => {
           <div>
             <h3 className="text-base font-bold text-white">B. Automatically Collected Usage & Diagnostic Data</h3>
             <p className="text-slate-300 mt-1">
-              When you browse the studio, standard technical data is collected automatically by hosting servers and network delivery services:
+              When you browse the studio, standard diagnostic data is collected automatically to ensure system stability and performance:
             </p>
             <ul className="list-disc list-inside space-y-1 text-slate-300 text-sm mt-2 ml-2">
               <li>Device and browser information (browser type, version, operating system, screen resolution).</li>
-              <li>Network information (IP address, approximate geographic region, referring URL).</li>
-              <li>Interaction statistics (pages visited, feature usage frequency, generation completion logs, error telemetry to fix bugs).</li>
+              <li>Network information (approximate geographic region, referring URL).</li>
+              <li>Interaction statistics (feature usage frequency, generation completion logs, error telemetry to fix bugs).</li>
             </ul>
           </div>
 
           <div>
-            <h3 className="text-base font-bold text-white">C. Account Information (Future / Optional)</h3>
+            <h3 className="text-base font-bold text-white">C. Account Information</h3>
             <p className="text-slate-300 mt-1">
-              The platform currently operates without user accounts. If you contact support via email or if optional future cloud services require account registration, we may collect your email address, chosen display name, and communication history solely to provide support or requested services.
+              When you sign in with Google, we securely store your email, display name, and avatar solely to authenticate your session and associate your private video projects with your creator account. We never sell or share your personal information.
             </p>
           </div>
         </div>

@@ -12,7 +12,8 @@ import {
   Mail,
   LogIn,
   LogOut,
-  User
+  User,
+  Shield
 } from 'lucide-react';
 import { CURRENT_APP_VERSION } from '../../config/version';
 import { useAuth } from '../../context/AuthContext';
@@ -46,7 +47,7 @@ export const Header: React.FC<HeaderProps> = ({
     { id: 'shorts-creator', label: 'Shorts Creator' },
     { id: 'content-assistant', label: 'Content & SEO' },
     { id: 'thumbnail-maker', label: 'Thumbnails' },
-    { id: 'templates', label: 'Templates' },
+    { id: 'templates', label: 'Template Maker' },
     { id: 'about-us', label: 'About Us' }
   ];
 
@@ -245,10 +246,21 @@ export const Header: React.FC<HeaderProps> = ({
                   <div className="px-3 py-2 border-b border-white/5 space-y-0.5">
                     <div className="font-semibold text-white truncate">{user.display_username}</div>
                     <div className="text-[11px] text-slate-400 truncate">{user.email || user.username}</div>
-                    <div className="inline-block mt-1 px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 text-[10px] font-mono">
-                      Neon PostgreSQL Cloud
+                    <div className="inline-block mt-1 px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-[10px] font-mono">
+                      Cloud Sync Active
                     </div>
                   </div>
+
+                  {user.role === 'admin' && (
+                    <button
+                      type="button"
+                      onClick={() => onNavigate('admin')}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left text-cyan-300 hover:text-white hover:bg-cyan-500/10 transition-colors font-semibold"
+                    >
+                      <Shield className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Admin Panel</span>
+                    </button>
+                  )}
 
                   <button
                     type="button"

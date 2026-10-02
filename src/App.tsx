@@ -10,6 +10,7 @@ import { ContentAssistant } from './components/assistant/ContentAssistant';
 import { ThumbnailMaker } from './components/thumbnail/ThumbnailMaker';
 import { ProjectsManager } from './components/projects/ProjectsManager';
 import { TemplatesLibrary } from './components/templates/TemplatesLibrary';
+import { AdminPanel } from './components/admin/AdminPanel';
 import { MusicVideoPlanner } from './components/music/MusicVideoPlanner';
 import { OneMinuteTimelinePlanner } from './components/timeline/OneMinuteTimelinePlanner';
 import { AIWebsiteGuide } from './components/guide/AIWebsiteGuide';
@@ -29,6 +30,7 @@ import { ALL_ARTICLES, getArticleBySlug } from './data/articles';
 import { Project } from './types';
 import { StudioApiService } from './services/api';
 import { UpdateNotificationModal } from './components/common/UpdateNotificationModal';
+import { PWAInstallPrompt } from './components/common/PWAInstallPrompt';
 import { AuthModal } from './components/common/AuthModal';
 import { useAuth } from './context/AuthContext';
 import { CURRENT_APP_VERSION, APP_VERSION_STORAGE_KEY, compareSemVer } from './config/version';
@@ -69,6 +71,7 @@ const parsePath = (pathname: string): { route: string; slug?: string } => {
     return { route: 'article-detail', slug: matched.slug };
   }
 
+  if (clean === 'admin' || clean === 'admin-panel' || clean === 'admin/dashboard') return { route: 'admin' };
   if (clean === 'projects' || clean === 'project') return { route: 'projects' };
   if (clean === 'timeline-planner' || clean === '1min-timeline' || clean === 'timeline' || clean === 'flow' || clean === 'video-timeline') return { route: 'timeline-planner' };
   if (clean === 'ai-guide' || clean === 'guide' || clean === 'website-guide' || clean === 'assistant-guide') return { route: 'ai-guide' };
@@ -123,6 +126,12 @@ export default function App() {
   // Version-Based Update Detection State
   const [showUpdateModal, setShowUpdateModal] = useState<boolean>(false);
   const [isUpdatePreviewMode, setIsUpdatePreviewMode] = useState<boolean>(false);
+  const [isUpdateRequired, setIsUpdateRequired] = useState<boolean>(false);
+  const [minimumSupportedVersion, setMinimumSupportedVersion] = useState<string>('1.0.0');
+  const [updateTitle, setUpdateTitle] = useState<string | undefined>(undefined);
+  const [updateDescription, setUpdateDescription] = useState<string | undefined>(undefined);
+  const [releaseNotes, setReleaseNotes] = useState<string | undefined>(undefined);
+  const [requiresSignIn, setRequiresSignIn] = useState<boolean>(false);
   const [detectedAppVersion, setDetectedAppVersion] = useState<string>(CURRENT_APP_VERSION);
   const [lastAcknowledgedVersion, setLastAcknowledgedVersion] = useState<string | null>(() => {
     try {
@@ -179,20 +188,35 @@ export default function App() {
       console.warn('Version check notice:', err);
     }
 
-    // Dynamic background version probe for live Vercel deployments
+    // Dynamic background version probe for live releases (Requirement 3 & 4)
     const checkServerVersion = async () => {
       try {
-        const res = await fetch(`/api/version?_ts=${Date.now()}`, {
+        const clientVer = localStorage.getItem(APP_VERSION_STORAGE_KEY) || CURRENT_APP_VERSION;
+        const res = await fetch(`/api/app/version?clientVersion=${encodeURIComponent(clientVer)}&_ts=${Date.now()}`, {
           headers: { 'Cache-Control': 'no-cache' }
         });
         if (res.ok) {
           const data = await res.json();
-          if (data && data.version) {
-            const currentAck = localStorage.getItem(APP_VERSION_STORAGE_KEY);
-            if (currentAck && compareSemVer(data.version, currentAck) > 0) {
-              setDetectedAppVersion(data.version);
+          if (data) {
+            setMinimumSupportedVersion(data.minimumSupportedVersion || '1.0.0');
+            setUpdateTitle(data.updateTitle);
+            setUpdateDescription(data.updateDescription);
+            setReleaseNotes(data.releaseNotes);
+            setRequiresSignIn(Boolean(data.requiresSignIn));
+
+            if (data.updateRequired) {
+              setDetectedAppVersion(data.latestVersion || CURRENT_APP_VERSION);
+              setIsUpdateRequired(true);
               setIsUpdatePreviewMode(false);
               setShowUpdateModal(true);
+            } else if (data.updateAvailable) {
+              const currentAck = localStorage.getItem(APP_VERSION_STORAGE_KEY);
+              if (!currentAck || compareSemVer(data.latestVersion, currentAck) > 0) {
+                setDetectedAppVersion(data.latestVersion);
+                setIsUpdateRequired(false);
+                setIsUpdatePreviewMode(false);
+                setShowUpdateModal(true);
+              }
             }
           }
         }
@@ -217,10 +241,18 @@ export default function App() {
     };
     window.addEventListener('kiran:open-update-modal', handleOpenModalEvent);
 
+    const handlePwaUpdateEvent = () => {
+      setIsUpdateRequired(false);
+      setIsUpdatePreviewMode(false);
+      setShowUpdateModal(true);
+    };
+    window.addEventListener('kiran:pwa-update-available', handlePwaUpdateEvent);
+
     return () => {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('kiran:open-update-modal', handleOpenModalEvent);
+      window.removeEventListener('kiran:pwa-update-available', handlePwaUpdateEvent);
     };
   }, []);
 
@@ -565,9 +597,23 @@ export default function App() {
             />
           )}
 
-          {/* Templates Library */}
+          {/* Templates Library & AI Template Maker */}
           {currentRoute === 'templates' && (
-            <TemplatesLibrary onUseTemplate={handleUseTemplate} />
+            <TemplatesLibrary
+              onUseTemplate={handleUseTemplate}
+              onProjectCreated={(newProject) => {
+                refreshProjects();
+                handleOpenProjectInEditor(newProject);
+              }}
+            />
+          )}
+
+          {/* Admin Control Center (Server-protected) */}
+          {currentRoute === 'admin' && (
+            <AdminPanel
+              onNavigateHome={() => navigateTo('landing')}
+              onOpenTemplates={() => navigateTo('templates')}
+            />
           )}
 
           {/* Music Video Storyboarder */}
@@ -811,7 +857,7 @@ export default function App() {
                                 setUpdateCheckStatus(`You are on the latest version (v${CURRENT_APP_VERSION})`);
                               }
                             } else {
-                              setUpdateCheckStatus('Server reachable. Current version up to date.');
+                              setUpdateCheckStatus('App is up to date. Current version is the latest.');
                             }
                           } catch {
                             setUpdateCheckStatus('Checked. Running current production version.');
@@ -855,14 +901,14 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Local Storage & Data Management */}
+              {/* Project Storage & Data Management */}
               <div className="p-6 rounded-3xl bg-[#121622] border border-white/10 space-y-4 text-xs shadow-xl">
                 <div className="flex items-center justify-between pb-3 border-b border-white/5">
                   <div className="flex items-center gap-2">
                     <HardDrive className="w-4 h-4 text-cyan-400" />
                     <div>
-                      <h3 className="text-sm font-bold text-white uppercase tracking-wider">Local Browser Storage</h3>
-                      <p className="text-[11px] text-slate-400">All project drafts and plans are stored directly in your browser.</p>
+                      <h3 className="text-sm font-bold text-white uppercase tracking-wider">Project Storage & Data</h3>
+                      <p className="text-[11px] text-slate-400">Your projects and workspace drafts are saved securely.</p>
                     </div>
                   </div>
                   <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 font-bold text-[10px] border border-cyan-500/20">
@@ -879,11 +925,8 @@ export default function App() {
                   </div>
                   <button
                     onClick={() => {
-                      if (window.confirm('Reset all projects in your local browser to default templates?')) {
-                        localStorage.removeItem('kiran_studio_projects');
-                        refreshProjects();
-                        alert('Workspace reset to default templates.');
-                      }
+                      localStorage.removeItem('kiran_studio_projects');
+                      refreshProjects();
                     }}
                     className="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-red-500/10 text-slate-300 hover:text-red-300 border border-white/10 hover:border-red-500/20 font-semibold text-xs transition-colors shrink-0 flex items-center gap-1.5"
                   >
@@ -988,6 +1031,9 @@ export default function App() {
         />
       )}
 
+      {/* PWA Mobile Installation Prompt & In-App Installability */}
+      <PWAInstallPrompt />
+
       {/* Google OAuth & Neon Authentication Modal */}
       <AuthModal />
 
@@ -995,8 +1041,19 @@ export default function App() {
       {showUpdateModal && (
         <UpdateNotificationModal
           detectedVersion={detectedAppVersion}
+          minimumSupportedVersion={minimumSupportedVersion}
+          isRequired={isUpdateRequired}
+          updateTitle={updateTitle}
+          updateDescription={updateDescription}
+          releaseNotes={releaseNotes}
+          requiresSignIn={requiresSignIn}
           isPreviewMode={isUpdatePreviewMode}
-          onClose={() => setShowUpdateModal(false)}
+          onClose={() => {
+            if (!isUpdateRequired) setShowUpdateModal(false);
+          }}
+          onLater={() => {
+            if (!isUpdateRequired) setShowUpdateModal(false);
+          }}
           onUpdateAcknowledged={(acknowledgedVer) => {
             setLastAcknowledgedVersion(acknowledgedVer);
             setShowUpdateModal(false);

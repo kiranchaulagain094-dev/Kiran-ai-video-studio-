@@ -19,7 +19,8 @@ import {
   Clock,
   LogOut,
   LogIn,
-  Database
+  Database,
+  Shield
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -49,7 +50,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'content-assistant', label: 'Content & SEO', icon: Sparkles, badge: 'SEO' },
     { id: 'music-video', label: 'Music Video Planner', icon: Sparkles },
     { id: 'projects', label: 'My Projects', icon: FolderGit2 },
-    { id: 'templates', label: 'Templates', icon: LayoutTemplate }
+    { id: 'templates', label: 'AI Template Maker', icon: LayoutTemplate, badge: 'NEW' }
   ];
 
   const legalNavItems = [
@@ -121,6 +122,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
             );
           })}
 
+          {/* Admin Access Link (Visible strictly only to admin) */}
+          {user?.role === 'admin' && (
+            <div className="pt-2 mt-2 border-t border-cyan-500/20">
+              <button
+                id="sidebar-nav-admin"
+                onClick={() => {
+                  onNavigate('admin');
+                  onClose();
+                }}
+                className={`
+                  w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all group cursor-pointer
+                  ${currentRoute === 'admin'
+                    ? 'bg-gradient-to-r from-cyan-600/30 to-indigo-600/20 text-cyan-300 border border-cyan-500/40' 
+                    : 'text-cyan-400 hover:text-cyan-200 hover:bg-cyan-500/10 border border-cyan-500/20'
+                  }
+                `}
+              >
+                <div className="flex items-center gap-3">
+                  <Shield className="w-4 h-4 text-cyan-400" />
+                  <span>Admin Panel</span>
+                </div>
+                <span className="text-[9px] px-1.5 py-0.5 rounded font-mono font-bold bg-cyan-500/20 text-cyan-300 uppercase">
+                  Admin
+                </span>
+              </button>
+            </div>
+          )}
+
           {/* Legal & Policy Direct Navigation */}
           <div className="pt-3 mt-3 border-t border-white/5">
             <div className="px-3 py-1">
@@ -172,7 +201,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 )}
                 <div className="flex-1 min-w-0 text-left">
                   <div className="text-xs font-semibold text-white truncate">{user.display_username}</div>
-                  <div className="text-[10px] text-slate-400 truncate">{user.email || 'Neon Cloud Account'}</div>
+                  <div className="text-[10px] text-slate-400 truncate">{user.email || 'Cloud Account'}</div>
                 </div>
               </div>
               <button

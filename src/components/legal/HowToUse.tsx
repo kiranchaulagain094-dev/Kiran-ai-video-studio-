@@ -36,7 +36,7 @@ export const HowToUse: React.FC<HowToUseProps> = ({ onNavigate }) => {
           1. Quick Start Overview
         </h2>
         <p>
-          Kiran AI Video Studio is designed to make video pre-production and YouTube optimization effortless, fast, and structured. You do not need to register an account, enter a credit card, or configure complex API keys. All tools work immediately in your modern web browser, and all your drafts are stored securely on your own device using browser localStorage.
+          Kiran AI Video Studio is designed to make video pre-production and YouTube optimization effortless, fast, and structured. All creative tools work immediately, and your projects are saved securely in your workspace so you can create with confidence.
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 not-prose">
           <div className="p-4 rounded-xl bg-[#121622] border border-white/5 space-y-1">
@@ -195,19 +195,19 @@ export const HowToUse: React.FC<HowToUseProps> = ({ onNavigate }) => {
         </div>
       </section>
 
-      {/* 3. Managing Projects & Data in Local Browser Storage */}
+      {/* 3. Managing Projects & Workspace Data */}
       <section className="space-y-3">
         <h2 className="text-xl sm:text-2xl font-bold text-white flex items-center gap-2 border-b border-white/10 pb-2">
           <HardDrive className="w-5 h-5 text-indigo-400" />
-          3. Managing Projects & Local Storage
+          3. Managing Projects & Workspace Data
         </h2>
         <p>
-          All your video plans, timelines, and preferences are saved automatically in your browser's HTML5 localStorage. This means:
+          All your video plans, timelines, and creative preferences are saved automatically in your workspace. This means:
         </p>
         <ul className="list-disc list-inside space-y-1 text-slate-300 text-xs sm:text-sm ml-2">
-          <li><strong>Zero Account Hassle:</strong> You can close your browser tab and return at any time to resume your drafts.</li>
-          <li><strong>Privacy First:</strong> Your creative drafts remain on your personal computer and are not uploaded to central tracking databases.</li>
-          <li><strong>Browser Clearing Warning:</strong> If you clear your browser's site cookies or storage cache, your locally stored drafts will be reset. Use the "Export JSON" feature in the editor or copy your script to a local text file to back up critical work.</li>
+          <li><strong>Instant Resumption:</strong> You can return at any time and resume your work right where you left off.</li>
+          <li><strong>Secure Synchronization:</strong> When signed in, your projects synchronize seamlessly across your devices.</li>
+          <li><strong>Flexible Exporting:</strong> You can export project details, scripts, and timelines at any time to share with your production team.</li>
         </ul>
       </section>
 

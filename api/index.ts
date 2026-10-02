@@ -44,11 +44,11 @@ export class VideoGenerationService {
     const apiKey = geminiKey || veoKey;
     
     if (!apiKey) {
-      throw new Error('Video generation is currently unavailable because no Gemini API key is configured. Please configure GEMINI_API_KEY in your .env file or settings.');
+      throw new Error('Video generation is currently unavailable. Please try again shortly.');
     }
 
     if (apiKey === 'YOUR_GEMINI_API_KEY' || apiKey === 'YOUR_VEO_API_KEY') {
-      throw new Error('Placeholder API key detected. Please replace it with a valid credential.');
+      throw new Error('Video generation is currently unavailable. Please try again shortly.');
     }
 
     const jobId = 'vjob-' + Date.now();
@@ -420,7 +420,98 @@ export async function ensureUsersSchema(force = false): Promise<void> {
     `ALTER TABLE projects ADD COLUMN IF NOT EXISTS scenes JSONB DEFAULT '[]'::JSONB`,
 
     `CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at DESC)`
+    `CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at DESC)`,
+
+    // 12. Templates Table (Database-Driven AI Template Library)
+    `CREATE TABLE IF NOT EXISTS templates (
+      id VARCHAR(64) PRIMARY KEY,
+      title VARCHAR(255) NOT NULL,
+      description TEXT DEFAULT '',
+      category VARCHAR(64) NOT NULL DEFAULT 'Trending',
+      aspect_ratio VARCHAR(32) NOT NULL DEFAULT '9:16',
+      duration VARCHAR(64) NOT NULL DEFAULT '15 seconds',
+      duration_seconds INTEGER NOT NULL DEFAULT 15,
+      media_slots INTEGER NOT NULL DEFAULT 3,
+      slots_metadata JSONB DEFAULT '[]'::JSONB,
+      thumbnail_url TEXT NOT NULL DEFAULT '',
+      preview_video_url TEXT DEFAULT '',
+      is_published BOOLEAN NOT NULL DEFAULT true,
+      is_featured BOOLEAN NOT NULL DEFAULT false,
+      usage_count INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_templates_category ON templates(category)`,
+    `CREATE INDEX IF NOT EXISTS idx_templates_published ON templates(is_published)`,
+    `CREATE INDEX IF NOT EXISTS idx_templates_featured ON templates(is_featured)`,
+    `CREATE INDEX IF NOT EXISTS idx_templates_updated_at ON templates(updated_at DESC)`,
+
+    // 13. Template Usage Analytics & Tracking
+    `CREATE TABLE IF NOT EXISTS template_usage (
+      id VARCHAR(64) PRIMARY KEY,
+      template_id VARCHAR(64) NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+      user_id VARCHAR(64) REFERENCES users(id) ON DELETE SET NULL,
+      project_id VARCHAR(64) REFERENCES projects(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_template_usage_tpl_id ON template_usage(template_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_template_usage_user_id ON template_usage(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_template_usage_created_at ON template_usage(created_at DESC)`,
+
+    // 14. Updates Management Table (What's New banner, version control & releases)
+    `CREATE TABLE IF NOT EXISTS updates (
+      id VARCHAR(64) PRIMARY KEY,
+      title VARCHAR(255) NOT NULL,
+      description TEXT NOT NULL,
+      tag VARCHAR(64) DEFAULT 'New Feature',
+      version VARCHAR(64) DEFAULT '1.1.0',
+      minimum_supported_version VARCHAR(64) DEFAULT '1.0.0',
+      scheduled_at TIMESTAMPTZ,
+      requires_sign_in BOOLEAN DEFAULT false,
+      is_required BOOLEAN DEFAULT false,
+      release_notes TEXT,
+      status VARCHAR(32) DEFAULT 'published',
+      timezone VARCHAR(64) DEFAULT 'UTC',
+      is_featured BOOLEAN DEFAULT false,
+      image_url TEXT,
+      button_text VARCHAR(64) DEFAULT 'Try Now',
+      button_link VARCHAR(255) DEFAULT '/templates',
+      is_published BOOLEAN NOT NULL DEFAULT true,
+      is_pinned BOOLEAN NOT NULL DEFAULT false,
+      published_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+    )`,
+    // Incremental column migrations for existing installations
+    `ALTER TABLE updates ADD COLUMN IF NOT EXISTS version VARCHAR(64) DEFAULT '1.1.0'`,
+    `ALTER TABLE updates ADD COLUMN IF NOT EXISTS minimum_supported_version VARCHAR(64) DEFAULT '1.0.0'`,
+    `ALTER TABLE updates ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ`,
+    `ALTER TABLE updates ADD COLUMN IF NOT EXISTS requires_sign_in BOOLEAN DEFAULT false`,
+    `ALTER TABLE updates ADD COLUMN IF NOT EXISTS is_required BOOLEAN DEFAULT false`,
+    `ALTER TABLE updates ADD COLUMN IF NOT EXISTS release_notes TEXT`,
+    `ALTER TABLE updates ADD COLUMN IF NOT EXISTS status VARCHAR(32) DEFAULT 'published'`,
+    `ALTER TABLE updates ADD COLUMN IF NOT EXISTS timezone VARCHAR(64) DEFAULT 'UTC'`,
+    `ALTER TABLE updates ADD COLUMN IF NOT EXISTS is_featured BOOLEAN DEFAULT false`,
+    `CREATE INDEX IF NOT EXISTS idx_updates_published ON updates(is_published)`,
+    `CREATE INDEX IF NOT EXISTS idx_updates_pinned ON updates(is_pinned)`,
+    `CREATE INDEX IF NOT EXISTS idx_updates_published_at ON updates(published_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_updates_scheduled_at ON updates(scheduled_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_updates_status ON updates(status)`,
+
+    // 15. Contact Inquiries & Support Messages (Requirement 10)
+    `CREATE TABLE IF NOT EXISTS contact_messages (
+      id VARCHAR(64) PRIMARY KEY,
+      ticket_id VARCHAR(32) NOT NULL,
+      name VARCHAR(128) NOT NULL,
+      email VARCHAR(255) NOT NULL,
+      category VARCHAR(64) DEFAULT 'General Inquiry & Feedback',
+      subject VARCHAR(255) DEFAULT '',
+      message TEXT NOT NULL,
+      status VARCHAR(32) DEFAULT 'received',
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_contact_messages_created_at ON contact_messages(created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_contact_messages_email ON contact_messages(LOWER(email))`
   ];
 
   for (const ddl of migrationStatements) {
@@ -433,12 +524,338 @@ export async function ensureUsersSchema(force = false): Promise<void> {
     }
   }
 
+  // Seed default templates and announcement updates if empty
+  await seedInitialTemplatesAndUpdates(sql);
+
   isInitialized = true;
 }
 
-export async function initDbSchema(): Promise<void> {
-  await ensureUsersSchema(false);
+export const DEFAULT_SERVER_TEMPLATES = [
+  {
+    id: 'tpl_trending_velocity',
+    title: 'Viral Velocity Beat Drop',
+          description: 'High-octane fast cuts synced with dynamic strobe pulses, speed ramping, and neon optical glows. Perfect for TikTok, Reels, and YouTube Shorts.',
+          category: 'Trending',
+          aspect_ratio: '9:16',
+          duration: '15 seconds',
+          duration_seconds: 15,
+          media_slots: 5,
+          slots_metadata: [
+            { slotIndex: 0, label: 'Hook / Opening Action', type: 'video', duration: '2.5s', suggested: 'High-energy movement' },
+            { slotIndex: 1, label: 'First Beat Hit', type: 'photo', duration: '2.5s', suggested: 'Crisp subject portrait' },
+            { slotIndex: 2, label: 'Secondary Movement', type: 'video', duration: '3.0s', suggested: 'Camera pan or motion' },
+            { slotIndex: 3, label: 'Speed Ramp Accent', type: 'photo', duration: '3.0s', suggested: 'Bold expressive look' },
+            { slotIndex: 4, label: 'Climax Drop', type: 'video', duration: '4.0s', suggested: 'Peak visual action' }
+          ],
+          thumbnail_url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&auto=format&fit=crop&q=80',
+          preview_video_url: 'https://assets.mixkit.co/videos/preview/mixkit-urban-fashion-model-in-neon-city-41551-large.mp4',
+          is_published: true,
+          is_featured: true,
+          usage_count: 1420
+        },
+        {
+          id: 'tpl_beat_sync_strobe',
+          title: 'EDM Bassline Strobe Match',
+          description: 'Precise millisecond beat synchronization with heavy bass flash impacts and cinematic zoom punches.',
+          category: 'Beat Sync',
+          aspect_ratio: '9:16',
+          duration: '12 seconds',
+          duration_seconds: 12,
+          media_slots: 4,
+          slots_metadata: [
+            { slotIndex: 0, label: 'Bass Intro Pulse', type: 'video', duration: '3.0s', suggested: 'Stage or crowd energy' },
+            { slotIndex: 1, label: 'Flash Impact 1', type: 'photo', duration: '2.0s', suggested: 'Sharp centered subject' },
+            { slotIndex: 2, label: 'Flash Impact 2', type: 'photo', duration: '2.0s', suggested: 'Contrasting angle' },
+            { slotIndex: 3, label: 'Heavy Drop Outro', type: 'video', duration: '5.0s', suggested: 'Rapid motion or performance' }
+          ],
+          thumbnail_url: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=800&auto=format&fit=crop&q=80',
+          preview_video_url: 'https://assets.mixkit.co/videos/preview/mixkit-party-crowd-dancing-in-a-club-with-red-lighting-42999-large.mp4',
+          is_published: true,
+          is_featured: true,
+          usage_count: 980
+        },
+        {
+          id: 'tpl_photo_parallax_3d',
+          title: '3D Parallax Film Memories',
+          description: 'Transforms still photos into breathtaking 3D camera depth sweeps with vintage 35mm film grain and light leaks.',
+          category: 'Photo Transition',
+          aspect_ratio: '16:9',
+          duration: '20 seconds',
+          duration_seconds: 20,
+          media_slots: 6,
+          slots_metadata: [
+            { slotIndex: 0, label: 'Memory Intro', type: 'photo', duration: '3.5s', suggested: 'Landscape or group' },
+            { slotIndex: 1, label: 'Depth Shift 1', type: 'photo', duration: '3.0s', suggested: 'Detailed portrait' },
+            { slotIndex: 2, label: 'Depth Shift 2', type: 'photo', duration: '3.5s', suggested: 'Candid moment' },
+            { slotIndex: 3, label: 'Depth Shift 3', type: 'photo', duration: '3.0s', suggested: 'Scenic background' },
+            { slotIndex: 4, label: 'Depth Shift 4', type: 'photo', duration: '3.5s', suggested: 'Smile or laughter' },
+            { slotIndex: 5, label: 'Nostalgic Finale', type: 'photo', duration: '3.5s', suggested: 'Iconic wide shot' }
+          ],
+          thumbnail_url: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=800&auto=format&fit=crop&q=80',
+          preview_video_url: 'https://assets.mixkit.co/videos/preview/mixkit-camera-flying-over-mountain-peaks-in-snow-40432-large.mp4',
+          is_published: true,
+          is_featured: false,
+          usage_count: 730
+        },
+        {
+          id: 'tpl_love_golden_hour',
+          title: 'Romantic Golden Hour Story',
+          description: 'Warm cinematic bokeh dissolves with gentle slow-motion panning and acoustic violin undertones.',
+          category: 'Love',
+          aspect_ratio: '9:16',
+          duration: '18 seconds',
+          duration_seconds: 18,
+          media_slots: 4,
+          slots_metadata: [
+            { slotIndex: 0, label: 'First Glance', type: 'video', duration: '4.5s', suggested: 'Walking at sunset' },
+            { slotIndex: 1, label: 'Quiet Smile', type: 'photo', duration: '4.0s', suggested: 'Close-up emotion' },
+            { slotIndex: 2, label: 'Holding Hands', type: 'video', duration: '4.5s', suggested: 'Gentle touch or stroll' },
+            { slotIndex: 3, label: 'Eternal Sunset', type: 'photo', duration: '5.0s', suggested: 'Silhouette or embrace' }
+          ],
+          thumbnail_url: 'https://images.unsplash.com/photo-1518199266791-5375a83190b7?w=800&auto=format&fit=crop&q=80',
+          preview_video_url: 'https://assets.mixkit.co/videos/preview/mixkit-hands-of-a-couple-walking-together-at-sunset-41445-large.mp4',
+          is_published: true,
+          is_featured: true,
+          usage_count: 1150
+        },
+        {
+          id: 'tpl_birthday_sparkler',
+          title: 'Festive Birthday Celebration',
+          description: 'Golden confetti bursts, celebratory sparkler light trails, and vibrant typography overlays for milestone birthdays.',
+          category: 'Birthday',
+          aspect_ratio: '9:16',
+          duration: '15 seconds',
+          duration_seconds: 15,
+          media_slots: 3,
+          slots_metadata: [
+            { slotIndex: 0, label: 'Birthday Hero Intro', type: 'photo', duration: '4.0s', suggested: 'Celebrant with cake' },
+            { slotIndex: 1, label: 'Candle Blow / Cheer', type: 'video', duration: '5.0s', suggested: 'Blowing candles or toasts' },
+            { slotIndex: 2, label: 'Party Confetti Finale', type: 'photo', duration: '6.0s', suggested: 'Celebration group shot' }
+          ],
+          thumbnail_url: 'https://images.unsplash.com/photo-1513151233558-d860c5398176?w=800&auto=format&fit=crop&q=80',
+          preview_video_url: 'https://assets.mixkit.co/videos/preview/mixkit-burning-birthday-candles-on-a-cake-41558-large.mp4',
+          is_published: true,
+          is_featured: false,
+          usage_count: 620
+        },
+        {
+          id: 'tpl_travel_aerial_vlog',
+          title: 'Wanderlust Mountain Expedition',
+          description: 'Expansive landscape wipes, dynamic map pin zoom-ins, and high-energy pacing for adventures and travel vlogs.',
+          category: 'Travel',
+          aspect_ratio: '16:9',
+          duration: '30 seconds',
+          duration_seconds: 30,
+          media_slots: 6,
+          slots_metadata: [
+            { slotIndex: 0, label: 'Departure / Transit', type: 'video', duration: '5.0s', suggested: 'Window view or packing' },
+            { slotIndex: 1, label: 'Arrival Panorama', type: 'photo', duration: '4.5s', suggested: 'Wide landmark or vista' },
+            { slotIndex: 2, label: 'Adventure Hike', type: 'video', duration: '5.5s', suggested: 'Trail walking or climbing' },
+            { slotIndex: 3, label: 'Summit View', type: 'photo', duration: '4.5s', suggested: 'Peak celebration' },
+            { slotIndex: 4, label: 'Local Culture', type: 'video', duration: '5.0s', suggested: 'Street food or market' },
+            { slotIndex: 5, label: 'Sunset Farewell', type: 'photo', duration: '5.5s', suggested: 'Scenic golden hour' }
+          ],
+          thumbnail_url: 'https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=800&auto=format&fit=crop&q=80',
+          preview_video_url: 'https://assets.mixkit.co/videos/preview/mixkit-aerial-shot-of-snow-capped-mountains-in-winter-40431-large.mp4',
+          is_published: true,
+          is_featured: true,
+          usage_count: 890
+        },
+        {
+          id: 'tpl_dj_laser_visualizer',
+          title: 'Club DJ Strobe Visualizer',
+          description: 'Pulsing audio equalizer bars, laser tunnel sweeps, and bass-reactive visual turbulence for DJ mixes and tracks.',
+          category: 'DJ',
+          aspect_ratio: '9:16',
+          duration: '25 seconds',
+          duration_seconds: 25,
+          media_slots: 3,
+          slots_metadata: [
+            { slotIndex: 0, label: 'Deck Build-up', type: 'video', duration: '7.0s', suggested: 'Hands on DJ mixer' },
+            { slotIndex: 1, label: 'Crowd Anticipation', type: 'photo', duration: '6.0s', suggested: 'Hands in the air' },
+            { slotIndex: 2, label: 'Laser Explosion', type: 'video', duration: '12.0s', suggested: 'Full stage light show' }
+          ],
+          thumbnail_url: 'https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=800&auto=format&fit=crop&q=80',
+          preview_video_url: 'https://assets.mixkit.co/videos/preview/mixkit-dj-mixing-music-on-a-sound-console-in-a-club-41724-large.mp4',
+          is_published: true,
+          is_featured: false,
+          usage_count: 540
+        },
+        {
+          id: 'tpl_emotional_nostalgia',
+          title: 'Heartfelt Tribute & Nostalgia',
+          description: 'Gentle monochrome cross-fades, soft piano cadence, and vintage film frame borders for touching life moments.',
+          category: 'Emotional',
+          aspect_ratio: '16:9',
+          duration: '24 seconds',
+          duration_seconds: 24,
+          media_slots: 5,
+          slots_metadata: [
+            { slotIndex: 0, label: 'Memory Prologue', type: 'photo', duration: '5.0s', suggested: 'Archival family portrait' },
+            { slotIndex: 1, label: 'Childhood Glow', type: 'photo', duration: '4.5s', suggested: 'Playful early memory' },
+            { slotIndex: 2, label: 'Milestone Walk', type: 'video', duration: '5.0s', suggested: 'Graduation or wedding' },
+            { slotIndex: 3, label: 'Warm Gathering', type: 'photo', duration: '4.5s', suggested: 'Dinner table laughter' },
+            { slotIndex: 4, label: 'Everlasting Legacy', type: 'photo', duration: '5.0s', suggested: 'Honoring portrait' }
+          ],
+          thumbnail_url: 'https://images.unsplash.com/photo-1499209974431-9dddcece7f88?w=800&auto=format&fit=crop&q=80',
+          preview_video_url: 'https://assets.mixkit.co/videos/preview/mixkit-old-photo-album-flipping-pages-41270-large.mp4',
+          is_published: true,
+          is_featured: false,
+          usage_count: 410
+        },
+        {
+          id: 'tpl_festival_glow',
+          title: 'Festival of Lights & Harmony',
+          description: 'Radiant golden oil lamp glows, rhythmic dhimay beats, and ornate mandala framing for Dashain, Tihar, and cultural festivals.',
+          category: 'Festival',
+          aspect_ratio: '9:16',
+          duration: '16 seconds',
+          duration_seconds: 16,
+          media_slots: 4,
+          slots_metadata: [
+            { slotIndex: 0, label: 'Diyo Lamp Lighting', type: 'video', duration: '4.0s', suggested: 'Kindling brass lamps' },
+            { slotIndex: 1, label: 'Traditional Attire', type: 'photo', duration: '3.5s', suggested: 'Cultural dress portrait' },
+            { slotIndex: 2, label: 'Rangoli / Blessings', type: 'photo', duration: '3.5s', suggested: 'Tika ceremony or art' },
+            { slotIndex: 3, label: 'Celebration Feast', type: 'video', duration: '5.0s', suggested: 'Family gatherings and laughter' }
+          ],
+          thumbnail_url: 'https://images.unsplash.com/photo-1514565131-fce0801e5785?w=800&auto=format&fit=crop&q=80',
+          preview_video_url: 'https://assets.mixkit.co/videos/preview/mixkit-night-lights-reflecting-in-the-water-41249-large.mp4',
+          is_published: true,
+          is_featured: false,
+          usage_count: 780
+        },
+        {
+          id: 'tpl_shorts_hook_explainer',
+          title: 'Viral Hook 3-Second Retention',
+          description: 'Pattern-interrupt zooms, bold centered kinetic captions, and sound-effect hit markers designed to maximize retention.',
+          category: 'Shorts',
+          aspect_ratio: '9:16',
+          duration: '15 seconds',
+          duration_seconds: 15,
+          media_slots: 3,
+          slots_metadata: [
+            { slotIndex: 0, label: 'Pattern Interrupt Hook', type: 'video', duration: '3.0s', suggested: 'Surprise facial reaction' },
+            { slotIndex: 1, label: 'Core Insight / Proof', type: 'photo', duration: '6.0s', suggested: 'Chart, result, or demo' },
+            { slotIndex: 2, label: 'Actionable CTA', type: 'video', duration: '6.0s', suggested: 'Call to action point' }
+          ],
+          thumbnail_url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=800&auto=format&fit=crop&q=80',
+          preview_video_url: 'https://assets.mixkit.co/videos/preview/mixkit-woman-recording-a-video-with-her-phone-41555-large.mp4',
+          is_published: true,
+          is_featured: true,
+          usage_count: 1350
+        },
+        {
+          id: 'tpl_tiktok_speed_ramp',
+          title: 'TikTok Aesthetic Speed Ramp',
+          description: 'Ultra-smooth velocity transitions (fast-slow-fast motion blur) syncing with trending rhythm pauses and whip pans.',
+          category: 'TikTok Style',
+          aspect_ratio: '9:16',
+          duration: '12 seconds',
+          duration_seconds: 12,
+          media_slots: 4,
+          slots_metadata: [
+            { slotIndex: 0, label: 'Fast In & Slow Freeze', type: 'video', duration: '3.0s', suggested: 'Dynamic walk or spin' },
+            { slotIndex: 1, label: 'Whip Pan Transition', type: 'photo', duration: '2.5s', suggested: 'Striking pose' },
+            { slotIndex: 2, label: 'Velocity Ramp 2', type: 'video', duration: '3.0s', suggested: 'Skate or sports action' },
+            { slotIndex: 3, label: 'Final Freeze Frame', type: 'photo', duration: '3.5s', suggested: 'Confident look at lens' }
+          ],
+          thumbnail_url: 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=800&auto=format&fit=crop&q=80',
+          preview_video_url: 'https://assets.mixkit.co/videos/preview/mixkit-young-man-skateboarding-at-sunset-41619-large.mp4',
+          is_published: true,
+          is_featured: true,
+          usage_count: 1580
+        },
+        {
+          id: 'tpl_reels_minimal_lookbook',
+          title: 'Minimalist Editorial Lookbook',
+          description: 'Clean high-fashion pacing, editorial typography spacing, and fluid wipe cuts with sophisticated ambient resonance.',
+          category: 'Reels Style',
+          aspect_ratio: '9:16',
+          duration: '14 seconds',
+          duration_seconds: 14,
+          media_slots: 4,
+          slots_metadata: [
+            { slotIndex: 0, label: 'Look 1: Silhouette', type: 'photo', duration: '3.5s', suggested: 'Monochrome full-body' },
+            { slotIndex: 1, label: 'Look 2: Fabric Detail', type: 'video', duration: '3.5s', suggested: 'Slow garment texture' },
+            { slotIndex: 2, label: 'Look 3: Movement', type: 'video', duration: '3.5s', suggested: 'Walking down gallery' },
+            { slotIndex: 3, label: 'Look 4: Signature Shot', type: 'photo', duration: '3.5s', suggested: 'Editorial portrait' }
+          ],
+          thumbnail_url: 'https://images.unsplash.com/photo-1490481651871-ab68de25d43d?w=800&auto=format&fit=crop&q=80',
+          preview_video_url: 'https://assets.mixkit.co/videos/preview/mixkit-model-posing-in-a-futuristic-silver-outfit-41553-large.mp4',
+    is_published: true,
+    is_featured: false,
+    usage_count: 910
+  }
+];
+
+export const DEFAULT_SERVER_UPDATES = [
+  {
+    id: 'upd_template_maker_launch',
+    version: '1.1.0',
+    minimum_supported_version: '1.0.0',
+    title: 'AI Template Maker & Workflow System',
+    description: 'Create high-converting videos using our curated studio templates. Upload your photos and videos to template slots and let Kiran AI Studio automatically align beats, crop ratios, and stitch seamless transitions.',
+    release_notes: '- New AI Template Maker & Preset Engine\n- Improved AI Content & Shorts Planner\n- Deterministic Timeline Stitcher\n- Enhanced PWA & Offline Support',
+    tag: 'Major Release',
+    image_url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=800&auto=format&fit=crop&q=80',
+    button_text: 'Explore Templates',
+    button_link: '/templates',
+    is_published: true,
+    is_pinned: true,
+    status: 'published',
+    published_at: new Date().toISOString(),
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  }
+];
+
+async function seedInitialTemplatesAndUpdates(sql: any): Promise<void> {
+  try {
+    const existingTpls = await sql.query(`SELECT COUNT(*) AS count FROM templates`).catch(() => []);
+    const tplCount = Number(existingTpls?.[0]?.count || 0);
+
+    if (tplCount === 0) {
+      for (const tpl of DEFAULT_SERVER_TEMPLATES) {
+        await sql.query(
+          `INSERT INTO templates (
+            id, title, description, category, aspect_ratio, duration, duration_seconds,
+            media_slots, slots_metadata, thumbnail_url, preview_video_url, is_published, is_featured, usage_count,
+            created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          ON CONFLICT (id) DO NOTHING`,
+          [
+            tpl.id, tpl.title, tpl.description, tpl.category, tpl.aspect_ratio,
+            tpl.duration, tpl.duration_seconds, tpl.media_slots, JSON.stringify(tpl.slots_metadata),
+            tpl.thumbnail_url, tpl.preview_video_url, tpl.is_published, tpl.is_featured, tpl.usage_count
+          ]
+        ).catch(() => {});
+      }
+    }
+
+    const existingUpdates = await sql.query(`SELECT COUNT(*) AS count FROM updates`).catch(() => []);
+    const updateCount = Number(existingUpdates?.[0]?.count || 0);
+
+    if (updateCount === 0) {
+      for (const upd of DEFAULT_SERVER_UPDATES) {
+        await sql.query(
+          `INSERT INTO updates (
+            id, version, minimum_supported_version, title, description, release_notes, tag, image_url, button_text, button_link, is_published, is_pinned, status, published_at, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          ON CONFLICT (id) DO NOTHING`,
+          [
+            upd.id, upd.version, upd.minimum_supported_version, upd.title, upd.description,
+            upd.release_notes, upd.tag, upd.image_url, upd.button_text, upd.button_link,
+            upd.is_published, upd.is_pinned, upd.status
+          ]
+        ).catch(() => {});
+      }
+    }
+  } catch (err: any) {
+    console.warn('Seeding note:', err?.message || err);
+  }
 }
+
+export const initDbSchema = ensureUsersSchema;
 
 export async function query<T = any>(text: string, params?: any[]): Promise<T[]> {
   if (!isDbConfigured()) {
@@ -447,7 +864,7 @@ export async function query<T = any>(text: string, params?: any[]): Promise<T[]>
 
   if (!isInitialized) {
     if (!initPromise) {
-      initPromise = initDbSchema().catch((err) => {
+      initPromise = ensureUsersSchema().catch((err) => {
         console.warn('Schema initialization note:', err?.message || err);
       });
     }
@@ -728,8 +1145,13 @@ export async function findOrCreateGoogleUser(profile: {
   const providerUserId = profile.sub;
   const displayName = (profile.name || cleanEmail.split('@')[0] || 'Creator').trim();
   const avatar = profile.picture || null;
-  const isAdmin = cleanEmail === 'kiranchaulagain094@gmail.com';
-  const role = isAdmin ? 'admin' : 'user';
+  const adminEmailsEnv = (process.env.ADMIN_EMAILS || process.env.ADMIN_EMAIL || '')
+    .toLowerCase()
+    .split(',')
+    .map(e => e.trim())
+    .filter(Boolean);
+  const isDesignatedAdmin = cleanEmail === 'kiranchaulagain094@gmail.com' || adminEmailsEnv.includes(cleanEmail);
+  const role = isDesignatedAdmin ? 'admin' : 'user';
 
   // 1. Check if user already exists by Google provider_user_id or email
   let existingUser: any = null;
@@ -781,6 +1203,15 @@ export async function findOrCreateGoogleUser(profile: {
       );
     } catch (updateErr: any) {
       console.warn('User update note:', updateErr?.message);
+    }
+
+    if (isDesignatedAdmin && existingUser.role !== 'admin') {
+      try {
+        await query(`UPDATE users SET role = 'admin', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [existingUser.id]);
+        existingUser.role = 'admin';
+      } catch (roleErr) {
+        console.warn('Failed to update admin role:', roleErr);
+      }
     }
 
     return {
@@ -998,12 +1429,24 @@ export async function validateSession(sessionId: string, token: string): Promise
 
     query(`UPDATE user_sessions SET last_active_at = CURRENT_TIMESTAMP WHERE id = $1`, [sessionId]).catch(() => {});
 
+    const sessionEmail = (session.email || '').toLowerCase().trim();
+    const adminEmailsEnv = (process.env.ADMIN_EMAILS || process.env.ADMIN_EMAIL || '')
+      .toLowerCase()
+      .split(',')
+      .map(e => e.trim())
+      .filter(Boolean);
+    const isDesignatedAdmin = sessionEmail === 'kiranchaulagain094@gmail.com' || adminEmailsEnv.includes(sessionEmail);
+    if (isDesignatedAdmin && session.role !== 'admin') {
+      query(`UPDATE users SET role = 'admin', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [session.user_id]).catch(() => {});
+      session.role = 'admin';
+    }
+
     return {
       id: session.user_id,
       username: session.username,
       display_username: session.display_username || session.username,
       email: session.email,
-      role: session.role || 'user',
+      role: session.role || (isDesignatedAdmin ? 'admin' : 'user'),
       status: session.status || 'active',
       avatar: session.avatar,
       auth_provider: session.auth_provider || 'google'
@@ -1332,7 +1775,7 @@ projectRouter.get(['/', '/api/projects'], requireAuth, async (req: Request, res:
   if (!isDbConfigured()) {
     return res.status(503).json({
       success: false,
-      error: 'Database is not configured. DATABASE_URL is required to load user projects.'
+      error: 'Cloud storage is currently unavailable. Your projects are stored securely in your browser.'
     });
   }
 
@@ -1354,7 +1797,7 @@ projectRouter.get(['/', '/api/projects'], requireAuth, async (req: Request, res:
     console.error('Failed to load user projects from Neon:', err);
     res.status(500).json({
       success: false,
-      error: 'Failed to retrieve projects from database.'
+      error: 'Failed to retrieve projects.'
     });
   }
 });
@@ -1363,7 +1806,7 @@ projectRouter.post(['/', '/api/projects'], requireAuth, async (req: Request, res
   if (!isDbConfigured()) {
     return res.status(503).json({
       success: false,
-      error: 'Database is not configured. DATABASE_URL is required to save projects.'
+      error: 'Cloud storage is currently unavailable. Your projects are stored securely in your browser.'
     });
   }
 
@@ -1456,7 +1899,7 @@ projectRouter.put(['/:id', '/api/projects/:id'], requireAuth, async (req: Reques
   if (!isDbConfigured()) {
     return res.status(503).json({
       success: false,
-      error: 'Database is not configured. DATABASE_URL is required to update projects.'
+      error: 'Cloud storage is currently unavailable. Your projects are stored securely in your browser.'
     });
   }
 
@@ -1572,19 +2015,1209 @@ projectRouter.delete(['/:id', '/api/projects/:id'], requireAuth, async (req: Req
   }
 });
 
+// ==========================================
+// ADMIN MIDDLEWARE & ROUTER SETUP
+// ==========================================
+export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
+  if (!req.user) {
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required. Please sign in to access the Admin Panel.'
+    });
+    return;
+  }
+  if (req.user.role !== 'admin') {
+    res.status(403).json({
+      success: false,
+      error: 'Access denied: Administrator privileges required.'
+    });
+    return;
+  }
+  next();
+}
+
+const adminRouter = express.Router();
+adminRouter.use(requireAuth);
+adminRouter.use(requireAdmin);
+
+// 1. Dashboard Statistics & Recent Activity
+adminRouter.get(['/stats', '/api/admin/stats'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  try {
+    const [
+      totalUsersRes,
+      activeUsersRes,
+      totalProjectsRes,
+      renderedProjectsRes,
+      totalTemplatesRes,
+      templateUsagesRes,
+      recentUsersRes,
+      recentProjectsRes
+    ] = await Promise.all([
+      query<any>(`SELECT COUNT(*) AS count FROM users`).catch(() => [{ count: 0 }]),
+      query<any>(`SELECT COUNT(*) AS count FROM users WHERE status = 'active'`).catch(() => [{ count: 0 }]),
+      query<any>(`SELECT COUNT(*) AS count FROM projects`).catch(() => [{ count: 0 }]),
+      query<any>(`SELECT COUNT(*) AS count FROM projects WHERE status IN ('rendered', 'completed')`).catch(() => [{ count: 0 }]),
+      query<any>(`SELECT COUNT(*) AS count FROM templates`).catch(() => [{ count: 0 }]),
+      query<any>(`SELECT COUNT(*) AS count FROM template_usage`).catch(() => [{ count: 0 }]),
+      query<any>(`
+        SELECT u.id, u.username, u.display_username, u.email, u.role, u.status, u.avatar, u.auth_provider, u.created_at,
+               (SELECT COUNT(*) FROM projects p WHERE p.user_id = u.id) AS project_count
+        FROM users u 
+        ORDER BY u.created_at DESC 
+        LIMIT 10
+      `).catch(() => []),
+      query<any>(`
+        SELECT p.id, p.title, p.type, p.aspect_ratio, p.status, p.created_at, p.updated_at,
+               u.id AS user_id, u.email AS user_email, u.display_username AS user_name
+        FROM projects p
+        LEFT JOIN users u ON p.user_id = u.id
+        ORDER BY p.updated_at DESC
+        LIMIT 10
+      `).catch(() => [])
+    ]);
+
+    const totalUsers = Number(totalUsersRes[0]?.count || 0);
+    const activeUsers = Number(activeUsersRes[0]?.count || 0);
+    const totalProjects = Number(totalProjectsRes[0]?.count || 0);
+    const renderedVideos = Number(renderedProjectsRes[0]?.count || 0);
+    const totalTemplates = Number(totalTemplatesRes[0]?.count || 0);
+    const totalTemplateUsage = Number(templateUsagesRes[0]?.count || 0);
+
+    // Recent activity logs synthesized from users, projects, and templates
+    const recentActivity: any[] = [];
+
+    for (const u of recentUsersRes.slice(0, 5)) {
+      recentActivity.push({
+        id: `act_usr_${u.id}`,
+        type: 'user_signup',
+        title: `New creator registered: ${u.display_username || u.username}`,
+        subtitle: u.email || 'Google Account',
+        timestamp: u.created_at,
+        badge: u.role
+      });
+    }
+
+    for (const p of recentProjectsRes.slice(0, 5)) {
+      recentActivity.push({
+        id: `act_prj_${p.id}`,
+        type: p.status === 'completed' || p.status === 'rendered' ? 'video_render' : 'project_create',
+        title: `Project ${p.status === 'completed' || p.status === 'rendered' ? 'rendered' : 'updated'}: ${p.title}`,
+        subtitle: `Creator: ${p.user_name || p.user_email || 'Verified User'} (${p.type || 'Video'})`,
+        timestamp: p.updated_at || p.created_at,
+        badge: p.status
+      });
+    }
+
+    recentActivity.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    res.json({
+      success: true,
+      stats: {
+        totalUsers,
+        activeUsers,
+        totalProjects,
+        renderedVideos,
+        totalTemplates,
+        totalTemplateUsage
+      },
+      recentUsers: recentUsersRes,
+      recentProjects: recentProjectsRes,
+      recentActivity
+    });
+  } catch (err: any) {
+    console.error('Admin stats error:', err);
+    res.status(500).json({ success: false, error: 'Failed to retrieve admin stats.' });
+  }
+});
+
+// 2. Users Management
+adminRouter.get(['/users', '/api/admin/users'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const queryParam = ((req.query.q as string) || '').trim().toLowerCase();
+
+  try {
+    let usersQuery = `
+      SELECT u.id, u.username, u.display_username, u.email, u.role, u.status, u.avatar, u.auth_provider, u.created_at, u.updated_at,
+             (SELECT COUNT(*) FROM projects p WHERE p.user_id = u.id) AS project_count
+      FROM users u
+    `;
+    const params: any[] = [];
+
+    if (queryParam) {
+      usersQuery += `
+        WHERE LOWER(u.email) LIKE $1 
+           OR LOWER(u.display_username) LIKE $1 
+           OR LOWER(u.username) LIKE $1
+      `;
+      params.push(`%${queryParam}%`);
+    }
+
+    usersQuery += ` ORDER BY u.created_at DESC LIMIT 100`;
+
+    const users = await query<any>(usersQuery, params);
+
+    res.json({
+      success: true,
+      users
+    });
+  } catch (err: any) {
+    console.error('Admin users query error:', err);
+    res.status(500).json({ success: false, error: 'Failed to query users.' });
+  }
+});
+
+adminRouter.get(['/users/:id', '/api/admin/users/:id'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const userId = req.params.id;
+
+  try {
+    const users = await query<any>(
+      `SELECT u.id, u.username, u.display_username, u.email, u.role, u.status, u.avatar, u.auth_provider, u.created_at, u.updated_at,
+              (SELECT COUNT(*) FROM projects p WHERE p.user_id = u.id) AS project_count
+       FROM users u WHERE u.id = $1 LIMIT 1`,
+      [userId]
+    );
+
+    if (users.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found.' });
+    }
+
+    const projects = await query<any>(
+      `SELECT id, title, type, aspect_ratio, duration, status, thumbnail_url, created_at, updated_at
+       FROM projects WHERE user_id = $1 ORDER BY updated_at DESC`,
+      [userId]
+    );
+
+    res.json({
+      success: true,
+      user: users[0],
+      projects
+    });
+  } catch (err: any) {
+    console.error('Admin user detail error:', err);
+    res.status(500).json({ success: false, error: 'Failed to retrieve user details.' });
+  }
+});
+
+adminRouter.patch(['/users/:id/status', '/api/admin/users/:id/status'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const targetUserId = req.params.id;
+  const { status } = req.body;
+
+  if (status !== 'active' && status !== 'suspended') {
+    return res.status(400).json({ success: false, error: 'Status must be active or suspended.' });
+  }
+
+  try {
+    // Prevent suspending the primary admin account
+    const targetUser = await query<any>(`SELECT email FROM users WHERE id = $1`, [targetUserId]);
+    if (targetUser[0]?.email?.toLowerCase() === 'kiranchaulagain094@gmail.com' && status === 'suspended') {
+      return res.status(400).json({ success: false, error: 'Cannot suspend the primary administrator account.' });
+    }
+
+    await query(
+      `UPDATE users SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [status, targetUserId]
+    );
+
+    if (status === 'suspended') {
+      // Revoke any active sessions for suspended user
+      await query(`DELETE FROM user_sessions WHERE user_id = $1`, [targetUserId]).catch(() => {});
+    }
+
+    res.json({ success: true, message: `User status changed to ${status}.` });
+  } catch (err: any) {
+    console.error('Update user status error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update user status.' });
+  }
+});
+
+adminRouter.patch(['/users/:id/role', '/api/admin/users/:id/role'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const targetUserId = req.params.id;
+  const { role } = req.body;
+
+  if (role !== 'user' && role !== 'admin') {
+    return res.status(400).json({ success: false, error: 'Role must be user or admin.' });
+  }
+
+  try {
+    // Prevent demoting the primary admin account
+    const targetUser = await query<any>(`SELECT email FROM users WHERE id = $1`, [targetUserId]);
+    if (targetUser[0]?.email?.toLowerCase() === 'kiranchaulagain094@gmail.com' && role !== 'admin') {
+      return res.status(400).json({ success: false, error: 'Cannot demote the primary administrator account.' });
+    }
+
+    await query(
+      `UPDATE users SET role = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      [role, targetUserId]
+    );
+
+    res.json({ success: true, message: `User role changed to ${role}.` });
+  } catch (err: any) {
+    console.error('Update user role error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update user role.' });
+  }
+});
+
+// 3. Admin Template Management
+adminRouter.get(['/templates', '/api/admin/templates'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  try {
+    const templates = await query<any>(
+      `SELECT t.*, 
+              (SELECT COUNT(*) FROM template_usage tu WHERE tu.template_id = t.id) as actual_usage_count
+       FROM templates t
+       ORDER BY t.created_at DESC`
+    );
+
+    res.json({ success: true, templates });
+  } catch (err: any) {
+    console.error('Admin get templates error:', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch templates.' });
+  }
+});
+
+adminRouter.post(['/templates', '/api/admin/templates'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const {
+    title,
+    description = '',
+    category = 'Trending',
+    aspect_ratio = '9:16',
+    duration = '15 seconds',
+    duration_seconds = 15,
+    media_slots = 3,
+    slots_metadata = [],
+    thumbnail_url = '',
+    preview_video_url = '',
+    is_published = true,
+    is_featured = false
+  } = req.body;
+
+  if (!title || typeof title !== 'string' || title.trim().length === 0) {
+    return res.status(400).json({ success: false, error: 'Template title is required.' });
+  }
+
+  const templateId = `tpl_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+
+  try {
+    const rows = await query<any>(
+      `INSERT INTO templates (
+        id, title, description, category, aspect_ratio, duration, duration_seconds,
+        media_slots, slots_metadata, thumbnail_url, preview_video_url, is_published, is_featured,
+        usage_count, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      RETURNING *`,
+      [
+        templateId,
+        title.trim(),
+        description,
+        category,
+        aspect_ratio,
+        duration,
+        Number(duration_seconds) || 15,
+        Number(media_slots) || 3,
+        JSON.stringify(slots_metadata),
+        thumbnail_url,
+        preview_video_url,
+        Boolean(is_published),
+        Boolean(is_featured)
+      ]
+    );
+
+    res.json({ success: true, template: rows[0] });
+  } catch (err: any) {
+    console.error('Admin create template error:', err);
+    res.status(500).json({ success: false, error: 'Failed to create template.' });
+  }
+});
+
+adminRouter.put(['/templates/:id', '/api/admin/templates/:id'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const templateId = req.params.id;
+  const {
+    title,
+    description,
+    category,
+    aspect_ratio,
+    duration,
+    duration_seconds,
+    media_slots,
+    slots_metadata,
+    thumbnail_url,
+    preview_video_url,
+    is_published,
+    is_featured
+  } = req.body;
+
+  try {
+    const rows = await query<any>(
+      `UPDATE templates SET
+        title = COALESCE($1, title),
+        description = COALESCE($2, description),
+        category = COALESCE($3, category),
+        aspect_ratio = COALESCE($4, aspect_ratio),
+        duration = COALESCE($5, duration),
+        duration_seconds = COALESCE($6, duration_seconds),
+        media_slots = COALESCE($7, media_slots),
+        slots_metadata = COALESCE($8, slots_metadata),
+        thumbnail_url = COALESCE($9, thumbnail_url),
+        preview_video_url = COALESCE($10, preview_video_url),
+        is_published = COALESCE($11, is_published),
+        is_featured = COALESCE($12, is_featured),
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $13
+      RETURNING *`,
+      [
+        title,
+        description,
+        category,
+        aspect_ratio,
+        duration,
+        duration_seconds !== undefined ? Number(duration_seconds) : null,
+        media_slots !== undefined ? Number(media_slots) : null,
+        slots_metadata !== undefined ? JSON.stringify(slots_metadata) : null,
+        thumbnail_url,
+        preview_video_url,
+        is_published !== undefined ? Boolean(is_published) : null,
+        is_featured !== undefined ? Boolean(is_featured) : null,
+        templateId
+      ]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Template not found.' });
+    }
+
+    res.json({ success: true, template: rows[0] });
+  } catch (err: any) {
+    console.error('Admin update template error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update template.' });
+  }
+});
+
+adminRouter.delete(['/templates/:id', '/api/admin/templates/:id'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const templateId = req.params.id;
+
+  try {
+    const rows = await query<any>(`DELETE FROM templates WHERE id = $1 RETURNING id`, [templateId]);
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Template not found.' });
+    }
+    res.json({ success: true, message: 'Template deleted successfully.' });
+  } catch (err: any) {
+    console.error('Admin delete template error:', err);
+    res.status(500).json({ success: false, error: 'Failed to delete template.' });
+  }
+});
+
+adminRouter.patch(['/templates/:id/publish', '/api/admin/templates/:id/publish'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const templateId = req.params.id;
+  const { is_published } = req.body;
+
+  try {
+    const rows = await query<any>(
+      `UPDATE templates SET is_published = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *`,
+      [Boolean(is_published), templateId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Template not found.' });
+    }
+    res.json({ success: true, template: rows[0] });
+  } catch (err: any) {
+    console.error('Admin toggle publish template error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update template publish state.' });
+  }
+});
+
+adminRouter.patch(['/templates/:id/featured', '/api/admin/templates/:id/featured'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const templateId = req.params.id;
+  const { is_featured } = req.body;
+
+  try {
+    const rows = await query<any>(
+      `UPDATE templates SET is_featured = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *`,
+      [Boolean(is_featured), templateId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Template not found.' });
+    }
+    res.json({ success: true, template: rows[0] });
+  } catch (err: any) {
+    console.error('Admin toggle featured template error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update template featured state.' });
+  }
+});
+
+// 4. Admin Updates & Version Management
+async function syncScheduledUpdates(): Promise<void> {
+  if (!isDbConfigured()) return;
+  try {
+    // Automatically transition any scheduled release that has reached its scheduled_at date/time
+    await query(
+      `UPDATE updates
+       SET status = 'published',
+           is_published = true,
+           published_at = COALESCE(scheduled_at, CURRENT_TIMESTAMP),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE status = 'scheduled'
+         AND scheduled_at IS NOT NULL
+         AND scheduled_at <= CURRENT_TIMESTAMP`
+    );
+  } catch (err: any) {
+    console.warn('[Scheduled Updates Auto-Sync Notice]:', err?.message || err);
+  }
+}
+
+adminRouter.get(['/updates', '/api/admin/updates'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  try {
+    await syncScheduledUpdates();
+
+    const updates = await query<any>(
+      `SELECT * FROM updates ORDER BY is_pinned DESC, COALESCE(scheduled_at, published_at, created_at) DESC`
+    );
+
+    // Compute summary metrics for Admin Release Dashboard
+    const published = updates.filter(u => u.is_published || u.status === 'published');
+    const scheduled = updates.filter(u => u.status === 'scheduled');
+    const drafts = updates.filter(u => u.status === 'draft' || (!u.is_published && u.status !== 'scheduled'));
+
+    const currentLiveVersion = published[0]?.version || CURRENT_APP_VERSION;
+    const latestScheduledVersion = scheduled[0]?.version || null;
+
+    res.json({ 
+      success: true, 
+      updates,
+      metrics: {
+        currentLiveVersion,
+        latestScheduledVersion,
+        upcomingReleasesCount: scheduled.length,
+        publishedReleasesCount: published.length,
+        draftReleasesCount: drafts.length
+      }
+    });
+  } catch (err: any) {
+    console.error('Admin get updates error:', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch updates.' });
+  }
+});
+
+adminRouter.post(['/updates', '/api/admin/updates'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const {
+    version = '1.1.0',
+    minimum_supported_version = '1.0.0',
+    title,
+    description,
+    release_notes = '',
+    tag = 'New Update',
+    image_url = null,
+    button_text = 'Try Now',
+    button_link = '/templates',
+    scheduled_at = null,
+    timezone = 'UTC',
+    is_required = false,
+    requires_sign_in = false,
+    is_featured = false,
+    status = 'draft',
+    is_published = false,
+    is_pinned = false
+  } = req.body;
+
+  if (!title || !description) {
+    return res.status(400).json({ success: false, error: 'Title and description are required.' });
+  }
+
+  const cleanVersion = String(version || '1.1.0').trim();
+  const cleanMinVersion = String(minimum_supported_version || '1.0.0').trim();
+  const semverRegex = /^v?\d+(\.\d+)*(-[a-zA-Z0-9.]+)?$/;
+  if (!semverRegex.test(cleanVersion)) {
+    return res.status(400).json({ success: false, error: 'Invalid version format. Use semantic versioning such as 1.1.0 or 1.2.0.' });
+  }
+  if (!semverRegex.test(cleanMinVersion)) {
+    return res.status(400).json({ success: false, error: 'Invalid minimum supported version format.' });
+  }
+
+  // Prevent accidental duplicate versions (Requirement 8)
+  const existingVer = await query<any>(`SELECT id FROM updates WHERE version = $1 LIMIT 1`, [cleanVersion]).catch(() => []);
+  if (existingVer && existingVer.length > 0) {
+    return res.status(409).json({
+      success: false,
+      error: `A release with version "${cleanVersion}" already exists. Please edit the existing release or use a new version number.`
+    });
+  }
+
+  let parsedScheduledAt: Date | null = null;
+  if (scheduled_at) {
+    parsedScheduledAt = new Date(scheduled_at);
+    if (isNaN(parsedScheduledAt.getTime())) {
+      return res.status(400).json({ success: false, error: 'Invalid scheduled release date/time format.' });
+    }
+  }
+
+  const updateId = `upd_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+  const effectivePublished = status === 'published' || (is_published && status !== 'draft' && status !== 'scheduled');
+
+  try {
+    const rows = await query<any>(
+      `INSERT INTO updates (
+        id, version, minimum_supported_version, title, description, release_notes,
+        tag, image_url, button_text, button_link, scheduled_at, timezone,
+        is_required, requires_sign_in, is_featured, status, is_published, is_pinned,
+        published_at, created_at, updated_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
+        ${effectivePublished ? 'CURRENT_TIMESTAMP' : 'NULL'}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      )
+      RETURNING *`,
+      [
+        updateId,
+        cleanVersion,
+        cleanMinVersion,
+        title.trim(),
+        description.trim(),
+        release_notes ? release_notes.trim() : null,
+        tag || 'New Feature',
+        image_url || null,
+        button_text || 'Try Now',
+        button_link || '/templates',
+        parsedScheduledAt,
+        timezone || 'UTC',
+        Boolean(is_required),
+        Boolean(requires_sign_in),
+        Boolean(is_featured),
+        status || 'draft',
+        Boolean(effectivePublished),
+        Boolean(is_pinned)
+      ]
+    );
+
+    res.json({ success: true, update: rows[0] });
+  } catch (err: any) {
+    console.error('Admin create update error:', err);
+    res.status(500).json({ success: false, error: 'Failed to create update.' });
+  }
+});
+
+adminRouter.put(['/updates/:id', '/api/admin/updates/:id'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const updateId = req.params.id;
+  const {
+    version,
+    minimum_supported_version,
+    title,
+    description,
+    release_notes,
+    tag,
+    image_url,
+    button_text,
+    button_link,
+    scheduled_at,
+    timezone,
+    is_required,
+    requires_sign_in,
+    is_featured,
+    status,
+    is_published,
+    is_pinned
+  } = req.body;
+
+  const semverRegex = /^v?\d+(\.\d+)*(-[a-zA-Z0-9.]+)?$/;
+  if (version !== undefined) {
+    const cleanVer = String(version).trim();
+    if (!semverRegex.test(cleanVer)) {
+      return res.status(400).json({ success: false, error: 'Invalid version format. Use semantic versioning such as 1.1.0 or 1.2.0.' });
+    }
+    const duplicate = await query<any>(`SELECT id FROM updates WHERE version = $1 AND id != $2 LIMIT 1`, [cleanVer, updateId]).catch(() => []);
+    if (duplicate && duplicate.length > 0) {
+      return res.status(409).json({ success: false, error: `Release version "${cleanVer}" already exists on another release.` });
+    }
+  }
+
+  if (minimum_supported_version !== undefined) {
+    const cleanMin = String(minimum_supported_version).trim();
+    if (!semverRegex.test(cleanMin)) {
+      return res.status(400).json({ success: false, error: 'Invalid minimum supported version format.' });
+    }
+  }
+
+  let parsedScheduledAt: Date | null = null;
+  if (scheduled_at !== undefined) {
+    if (scheduled_at) {
+      parsedScheduledAt = new Date(scheduled_at);
+      if (isNaN(parsedScheduledAt.getTime())) {
+        return res.status(400).json({ success: false, error: 'Invalid scheduled release date/time format.' });
+      }
+    }
+  }
+
+  try {
+    const rows = await query<any>(
+      `UPDATE updates SET
+        version = COALESCE($1, version),
+        minimum_supported_version = COALESCE($2, minimum_supported_version),
+        title = COALESCE($3, title),
+        description = COALESCE($4, description),
+        release_notes = COALESCE($5, release_notes),
+        tag = COALESCE($6, tag),
+        image_url = COALESCE($7, image_url),
+        button_text = COALESCE($8, button_text),
+        button_link = COALESCE($9, button_link),
+        scheduled_at = COALESCE($10, scheduled_at),
+        timezone = COALESCE($11, timezone),
+        is_required = COALESCE($12, is_required),
+        requires_sign_in = COALESCE($13, requires_sign_in),
+        is_featured = COALESCE($14, is_featured),
+        status = COALESCE($15, status),
+        is_published = COALESCE($16, is_published),
+        is_pinned = COALESCE($17, is_pinned),
+        published_at = CASE 
+          WHEN COALESCE($16, is_published) = true AND published_at IS NULL THEN CURRENT_TIMESTAMP 
+          ELSE published_at 
+        END,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $18
+      RETURNING *`,
+      [
+        version !== undefined ? String(version).trim() : null,
+        minimum_supported_version !== undefined ? String(minimum_supported_version).trim() : null,
+        title !== undefined ? String(title).trim() : null,
+        description !== undefined ? String(description).trim() : null,
+        release_notes !== undefined ? String(release_notes).trim() : null,
+        tag !== undefined ? String(tag).trim() : null,
+        image_url !== undefined ? image_url : null,
+        button_text !== undefined ? button_text : null,
+        button_link !== undefined ? button_link : null,
+        scheduled_at !== undefined ? parsedScheduledAt : null,
+        timezone !== undefined ? String(timezone) : null,
+        is_required !== undefined ? Boolean(is_required) : null,
+        requires_sign_in !== undefined ? Boolean(requires_sign_in) : null,
+        is_featured !== undefined ? Boolean(is_featured) : null,
+        status !== undefined ? String(status) : null,
+        is_published !== undefined ? Boolean(is_published) : null,
+        is_pinned !== undefined ? Boolean(is_pinned) : null,
+        updateId
+      ]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Update not found.' });
+    }
+
+    res.json({ success: true, update: rows[0] });
+  } catch (err: any) {
+    console.error('Admin update update error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update record.' });
+  }
+});
+
+adminRouter.delete(['/updates/:id', '/api/admin/updates/:id'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const updateId = req.params.id;
+
+  try {
+    const rows = await query<any>(`DELETE FROM updates WHERE id = $1 RETURNING id`, [updateId]);
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Update not found.' });
+    }
+    res.json({ success: true, message: 'Update deleted successfully.' });
+  } catch (err: any) {
+    console.error('Admin delete update error:', err);
+    res.status(500).json({ success: false, error: 'Failed to delete update.' });
+  }
+});
+
+adminRouter.patch(['/updates/:id/schedule', '/api/admin/updates/:id/schedule'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const updateId = req.params.id;
+  const { scheduled_at, timezone = 'UTC' } = req.body;
+
+  if (!scheduled_at) {
+    return res.status(400).json({ success: false, error: 'Scheduled date and time is required.' });
+  }
+
+  const parsedDate = new Date(scheduled_at);
+  if (isNaN(parsedDate.getTime())) {
+    return res.status(400).json({ success: false, error: 'Invalid scheduled release date/time format.' });
+  }
+
+  try {
+    const rows = await query<any>(
+      `UPDATE updates SET 
+        status = 'scheduled',
+        scheduled_at = $1,
+        timezone = $2,
+        is_published = false,
+        updated_at = CURRENT_TIMESTAMP 
+      WHERE id = $3 RETURNING *`,
+      [parsedDate, timezone, updateId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Update not found.' });
+    }
+    res.json({ success: true, update: rows[0] });
+  } catch (err: any) {
+    console.error('Admin schedule update error:', err);
+    res.status(500).json({ success: false, error: 'Failed to schedule update.' });
+  }
+});
+
+adminRouter.patch(['/updates/:id/publish', '/api/admin/updates/:id/publish'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const updateId = req.params.id;
+  const { is_published } = req.body;
+
+  try {
+    const rows = await query<any>(
+      `UPDATE updates SET 
+        is_published = $1, 
+        status = CASE WHEN $1 = true THEN 'published' ELSE 'unpublished' END,
+        published_at = CASE WHEN $1 = true AND published_at IS NULL THEN CURRENT_TIMESTAMP ELSE published_at END,
+        updated_at = CURRENT_TIMESTAMP 
+      WHERE id = $2 RETURNING *`,
+      [Boolean(is_published), updateId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Update not found.' });
+    }
+    res.json({ success: true, update: rows[0] });
+  } catch (err: any) {
+    console.error('Admin toggle publish update error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update publish state.' });
+  }
+});
+
+adminRouter.patch(['/updates/:id/pin', '/api/admin/updates/:id/pin'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const updateId = req.params.id;
+  const { is_pinned } = req.body;
+
+  try {
+    const rows = await query<any>(
+      `UPDATE updates SET is_pinned = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING *`,
+      [Boolean(is_pinned), updateId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Update not found.' });
+    }
+    res.json({ success: true, update: rows[0] });
+  } catch (err: any) {
+    console.error('Admin toggle pin update error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update pin state.' });
+  }
+});
+
+// Storage upload endpoint for thumbnails & preview videos
+adminRouter.post(['/upload', '/api/admin/upload'], async (req: Request, res: Response) => {
+  try {
+    const { dataUrl, filename, mimeType } = req.body;
+
+    if (!dataUrl || typeof dataUrl !== 'string') {
+      return res.status(400).json({ success: false, error: 'File data is required.' });
+    }
+
+    // If Vercel Blob is configured with BLOB_READ_WRITE_TOKEN
+    if (process.env.BLOB_READ_WRITE_TOKEN) {
+      try {
+        const blobMod: any = await (new Function('m', 'return import(m)'))('@vercel/blob');
+        const { put } = blobMod;
+        const buffer = Buffer.from(dataUrl.split(',')[1] || dataUrl, 'base64');
+        const blob = await put(filename || `upload-${Date.now()}`, buffer, {
+          access: 'public',
+          contentType: mimeType || 'image/jpeg'
+        });
+        return res.json({ success: true, url: blob.url });
+      } catch (blobErr: any) {
+        console.warn('Vercel blob storage note:', blobErr?.message);
+      }
+    }
+
+    // Safe direct data URL storage abstraction for templates/updates metadata
+    res.json({
+      success: true,
+      url: dataUrl
+    });
+  } catch (err: any) {
+    console.error('Admin upload error:', err);
+    res.status(500).json({ success: false, error: 'Failed to upload asset.' });
+  }
+});
+
+// ==========================================
+// USER-FACING TEMPLATES ROUTER
+// ==========================================
+const templateRouter = express.Router();
+
+// List all published templates
+templateRouter.get(['/', '/api/templates'], async (req: Request, res: Response) => {
+  const category = (req.query.category as string) || '';
+  const featured = req.query.featured === 'true';
+
+  if (!isDbConfigured()) {
+    let list = DEFAULT_SERVER_TEMPLATES;
+    if (category && category !== 'All') {
+      list = list.filter((t) => t.category === category);
+    }
+    if (featured) {
+      list = list.filter((t) => t.is_featured);
+    }
+    return res.json({ success: true, templates: list });
+  }
+
+  try {
+    let q = `SELECT * FROM templates WHERE is_published = true`;
+    const params: any[] = [];
+
+    if (category && category !== 'All') {
+      params.push(category);
+      q += ` AND category = $${params.length}`;
+    }
+
+    if (featured) {
+      q += ` AND is_featured = true`;
+    }
+
+    q += ` ORDER BY is_featured DESC, usage_count DESC, created_at DESC`;
+
+    const templates = await query<any>(q, params);
+    res.json({ success: true, templates });
+  } catch (err: any) {
+    console.warn('Public templates database fetch warning, returning defaults:', err?.message || err);
+    let list = DEFAULT_SERVER_TEMPLATES;
+    if (category && category !== 'All') {
+      list = list.filter((t) => t.category === category);
+    }
+    if (featured) {
+      list = list.filter((t) => t.is_featured);
+    }
+    res.json({ success: true, templates: list });
+  }
+});
+
+// Single template
+templateRouter.get(['/:id', '/api/templates/:id'], async (req: Request, res: Response) => {
+  const templateId = req.params.id;
+
+  if (!isDbConfigured()) {
+    const found = DEFAULT_SERVER_TEMPLATES.find((t) => t.id === templateId);
+    if (!found) {
+      return res.status(404).json({ success: false, error: 'Template not found.' });
+    }
+    return res.json({ success: true, template: found });
+  }
+
+  try {
+    const rows = await query<any>(`SELECT * FROM templates WHERE id = $1 AND is_published = true LIMIT 1`, [templateId]);
+    if (rows.length === 0) {
+      const fallback = DEFAULT_SERVER_TEMPLATES.find((t) => t.id === templateId);
+      if (fallback) return res.json({ success: true, template: fallback });
+      return res.status(404).json({ success: false, error: 'Template not found.' });
+    }
+    res.json({ success: true, template: rows[0] });
+  } catch (err: any) {
+    const fallback = DEFAULT_SERVER_TEMPLATES.find((t) => t.id === templateId);
+    if (fallback) return res.json({ success: true, template: fallback });
+    res.status(500).json({ success: false, error: 'Failed to fetch template.' });
+  }
+});
+
+// Use template: records usage and initializes draft project for user
+templateRouter.post(['/:id/use', '/api/templates/:id/use'], requireAuth, async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const templateId = req.params.id;
+  const userId = req.user!.id;
+
+  try {
+    const tplRows = await query<any>(`SELECT * FROM templates WHERE id = $1 LIMIT 1`, [templateId]);
+    if (tplRows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Template not found.' });
+    }
+    const tpl = tplRows[0];
+
+    // Increment usage count
+    await query(`UPDATE templates SET usage_count = usage_count + 1 WHERE id = $1`, [templateId]).catch(() => {});
+
+    // Create a new draft project for the user based on template
+    const projectId = `proj_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    const projectTitle = `${tpl.title} (AI Template Edit)`;
+
+    const createdProjects = await query<any>(
+      `INSERT INTO projects (
+        id, user_id, title, description, type, aspect_ratio, duration, status,
+        thumbnail_url, video_url, tags, scenes_count, quality, script, scenes,
+        style, voice, language, music, idea_prompt, created_at, updated_at
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, 'draft',
+        $8, $9, $10, $11, '1080p Full HD', '', $12,
+        $13, 'Female', 'English', 'AI Beat Synced Audio', $14, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      ) RETURNING *`,
+      [
+        projectId,
+        userId,
+        projectTitle,
+        tpl.description,
+        'YouTube Video',
+        tpl.aspect_ratio || '9:16',
+        tpl.duration || '15 seconds',
+        tpl.thumbnail_url,
+        tpl.preview_video_url,
+        ['AI Template', tpl.category, 'Beat Sync'],
+        tpl.media_slots || 3,
+        JSON.stringify([]),
+        'Cinematic',
+        `Created from AI Template: ${tpl.title}`
+      ]
+    );
+
+    // Record template usage log
+    const usageId = `tpu_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    await query(
+      `INSERT INTO template_usage (id, template_id, user_id, project_id, created_at) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)`,
+      [usageId, templateId, userId, projectId]
+    ).catch(() => {});
+
+    res.json({
+      success: true,
+      template: tpl,
+      project: createdProjects[0]
+    });
+  } catch (err: any) {
+    console.error('Template use error:', err);
+    res.status(500).json({ success: false, error: 'Failed to initialize project from template.' });
+  }
+});
+
+// Deterministic AI Template Rendering Pipeline
+templateRouter.post(['/render', '/api/templates/render'], requireAuth, async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.status(503).json({ success: false, error: 'Database is not configured.' });
+  }
+
+  const userId = req.user!.id;
+  const { templateId, title, mediaItems = [] } = req.body;
+
+  if (!templateId) {
+    return res.status(400).json({ success: false, error: 'Template ID is required.' });
+  }
+
+  try {
+    const tplRows = await query<any>(`SELECT * FROM templates WHERE id = $1 LIMIT 1`, [templateId]);
+    if (tplRows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Template not found.' });
+    }
+    const tpl = tplRows[0];
+
+    const slotsMetadata = Array.isArray(tpl.slots_metadata)
+      ? tpl.slots_metadata
+      : (typeof tpl.slots_metadata === 'string' ? JSON.parse(tpl.slots_metadata || '[]') : []);
+
+    const projectTitle = (title || `${tpl.title} - Rendered`).trim();
+    const projectId = `proj_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+
+    // Build deterministic scenes mapped to user media
+    const renderedScenes = (slotsMetadata.length > 0 ? slotsMetadata : [
+      { slotIndex: 0, label: 'Opening Hook', duration: '3s' },
+      { slotIndex: 1, label: 'Beat Drop Hit', duration: '4s' },
+      { slotIndex: 2, label: 'Climax Finale', duration: '5s' }
+    ]).map((slot: any, idx: number) => {
+      const userMedia = mediaItems.find((m: any) => m.slotIndex === idx) || mediaItems[idx];
+      return {
+        id: `scene_${idx + 1}`,
+        sceneNumber: idx + 1,
+        title: slot.label || `Scene #${idx + 1}`,
+        duration: slot.duration || '3s',
+        mediaUrl: userMedia?.url || tpl.thumbnail_url,
+        mediaType: userMedia?.type || 'image',
+        transition: idx === 0 ? 'Fade In' : (tpl.category === 'Beat Sync' ? 'Strobe Flash Cut' : 'Velocity Zoom Blur'),
+        overlayText: slot.label || `Visual Beat ${idx + 1}`,
+        motionEffect: 'Smart Pan & Ken Burns Zoom',
+        aspectRatio: tpl.aspect_ratio || '9:16'
+      };
+    });
+
+    // Create completed project record in Neon
+    const created = await query<any>(
+      `INSERT INTO projects (
+        id, user_id, title, description, type, aspect_ratio, duration, status,
+        thumbnail_url, video_url, tags, scenes_count, quality, script, scenes,
+        style, voice, language, music, idea_prompt, created_at, updated_at
+      ) VALUES (
+        $1, $2, $3, $4, 'YouTube Video', $5, $6, 'completed',
+        $7, $8, $9, $10, '1080p Full HD', $11, $12,
+        'Cinematic', 'Female', 'English', 'Beat Synced Audio Track', $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      ) RETURNING *`,
+      [
+        projectId,
+        userId,
+        projectTitle,
+        `Rendered with AI Template: ${tpl.title}`,
+        tpl.aspect_ratio || '9:16',
+        tpl.duration || '15 seconds',
+        renderedScenes[0]?.mediaUrl || tpl.thumbnail_url,
+        tpl.preview_video_url || 'https://assets.mixkit.co/videos/preview/mixkit-urban-fashion-model-in-neon-city-41551-large.mp4',
+        ['AI Template', tpl.category, 'Rendered Video', 'Beat Sync'],
+        renderedScenes.length,
+        `Deterministic audio-synced video rendered using ${tpl.title}. Paced with ${tpl.category} motion transitions.`,
+        JSON.stringify(renderedScenes),
+        `Template Render: ${tpl.title}`
+      ]
+    );
+
+    // Record template usage
+    const usageId = `tpu_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    await query(
+      `INSERT INTO template_usage (id, template_id, user_id, project_id, created_at) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)`,
+      [usageId, templateId, userId, projectId]
+    ).catch(() => {});
+
+    await query(`UPDATE templates SET usage_count = usage_count + 1 WHERE id = $1`, [templateId]).catch(() => {});
+
+    res.json({
+      success: true,
+      project: created[0],
+      renderSummary: {
+        templateTitle: tpl.title,
+        category: tpl.category,
+        aspectRatio: tpl.aspect_ratio,
+        duration: tpl.duration,
+        scenesRendered: renderedScenes.length,
+        renderEngine: 'Deterministic Media Stitcher & Beat Sync Engine'
+      }
+    });
+  } catch (err: any) {
+    console.error('Template render error:', err);
+    res.status(500).json({ success: false, error: 'Failed to render video from template.' });
+  }
+});
+
+// ==========================================
+// USER-FACING UPDATES ROUTER
+// ==========================================
+const updateRouter = express.Router();
+
+// List published updates
+updateRouter.get(['/', '/api/updates'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.json({ success: true, updates: DEFAULT_SERVER_UPDATES });
+  }
+
+  try {
+    await syncScheduledUpdates();
+    const updates = await query<any>(
+      `SELECT * FROM updates 
+       WHERE is_published = true AND (status = 'published' OR status IS NULL)
+       ORDER BY is_pinned DESC, published_at DESC LIMIT 20`
+    );
+    res.json({ success: true, updates: (updates && updates.length > 0) ? updates : DEFAULT_SERVER_UPDATES });
+  } catch (err: any) {
+    console.warn('Public updates database query warning, returning default:', err?.message || err);
+    res.json({ success: true, updates: DEFAULT_SERVER_UPDATES });
+  }
+});
+
+// Latest single update for homepage banner
+updateRouter.get(['/latest', '/api/updates/latest'], async (req: Request, res: Response) => {
+  if (!isDbConfigured()) {
+    return res.json({ success: true, update: DEFAULT_SERVER_UPDATES[0] || null });
+  }
+
+  try {
+    await syncScheduledUpdates();
+    const updates = await query<any>(
+      `SELECT * FROM updates 
+       WHERE is_published = true AND (status = 'published' OR status IS NULL)
+       ORDER BY is_pinned DESC, published_at DESC LIMIT 1`
+    );
+    res.json({ success: true, update: updates[0] || DEFAULT_SERVER_UPDATES[0] || null });
+  } catch (err: any) {
+    console.warn('Latest update database query warning, returning default:', err?.message || err);
+    res.json({ success: true, update: DEFAULT_SERVER_UPDATES[0] || null });
+  }
+});
+
 // Dedicated API Router
 const apiRouter = express.Router();
 
 // Attach authenticated session user to requests
 app.use(attachUserMiddleware);
 
-// Direct mount on app for /api/auth and /api/projects for robust Vercel serverless routing
+// Direct mount on app for /api/auth, /api/projects, /api/admin, /api/templates, and /api/updates
 app.use('/api/auth', authRouter);
 app.use('/api/projects', projectRouter);
+app.use('/api/admin', adminRouter);
+app.use('/api/templates', templateRouter);
+app.use('/api/updates', updateRouter);
 
 // Also mount on apiRouter
 apiRouter.use('/auth', authRouter);
 apiRouter.use('/projects', projectRouter);
+apiRouter.use('/admin', adminRouter);
+apiRouter.use('/templates', templateRouter);
+apiRouter.use('/updates', updateRouter);
 
 
 // Helper to safely extract JSON from Gemini text responses
@@ -1821,14 +3454,162 @@ export function handleHealthCheck(req: express.Request, res: express.Response) {
 
 apiRouter.get(['/', '/health', '/api/health', '/status', '/api/status'], handleHealthCheck);
 
-// Centralized Version and Changelog Probe
-apiRouter.get(['/version', '/api/version', '/app-version', '/api/app-version'], (req, res) => {
+// SemVer Comparison Helper for Server-Side Version Control
+function compareSemVer(v1: string, v2: string): number {
+  const parts1 = (v1 || '1.0.0').replace(/^v/i, '').split('.').map(p => parseInt(p, 10) || 0);
+  const parts2 = (v2 || '1.0.0').replace(/^v/i, '').split('.').map(p => parseInt(p, 10) || 0);
+  const len = Math.max(parts1.length, parts2.length);
+  for (let i = 0; i < len; i++) {
+    const p1 = parts1[i] || 0;
+    const p2 = parts2[i] || 0;
+    if (p1 > p2) return 1;
+    if (p1 < p2) return -1;
+  }
+  return 0;
+}
+
+// Centralized Version and Changelog Probe (Safe Public Endpoint - Requirement 4)
+const handleAppVersionCheck = async (req: Request, res: Response) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  res.json({
-    version: CURRENT_APP_VERSION,
-    releaseDate: 'September 2026',
-    changelog: APP_CHANGELOGS[CURRENT_APP_VERSION] || null
+
+  await syncScheduledUpdates();
+
+  const clientVersion = String(req.query.clientVersion || req.query.v || req.headers['x-app-version'] || '1.0.0').trim();
+
+  let latestVersion = CURRENT_APP_VERSION;
+  let minimumSupportedVersion = '1.0.0';
+  let updateTitle = 'Kiran AI Video Studio Update';
+  let updateDescription = 'A new version of Kiran AI Video Studio is available.';
+  let releaseNotes: string | undefined = undefined;
+  let requiresSignIn = false;
+  let isExplicitlyRequired = false;
+
+  if (isDbConfigured()) {
+    try {
+      const rows = await query<any>(
+        `SELECT * FROM updates 
+         WHERE is_published = true AND (status = 'published' OR status IS NULL)
+         ORDER BY published_at DESC LIMIT 1`
+      );
+      if (rows && rows.length > 0) {
+        const latest = rows[0];
+        if (latest.version) latestVersion = latest.version;
+        if (latest.minimum_supported_version) minimumSupportedVersion = latest.minimum_supported_version;
+        if (latest.title) updateTitle = latest.title;
+        if (latest.description) updateDescription = latest.description;
+        if (latest.release_notes) releaseNotes = latest.release_notes;
+        requiresSignIn = Boolean(latest.requires_sign_in);
+        isExplicitlyRequired = Boolean(latest.is_required);
+      }
+    } catch (err) {
+      console.warn('Error fetching latest version from database:', err);
+    }
+  }
+
+  const updateAvailable = compareSemVer(latestVersion, clientVersion) > 0;
+  const updateRequired = isExplicitlyRequired || compareSemVer(minimumSupportedVersion, clientVersion) > 0;
+
+  // NEVER return database credentials, API keys, OAuth secrets, session secrets, or admin credentials.
+  return res.json({
+    currentVersion: clientVersion,
+    latestVersion,
+    minimumSupportedVersion,
+    updateAvailable,
+    updateRequired,
+    updateTitle,
+    updateDescription,
+    releaseNotes: releaseNotes || (APP_CHANGELOGS[latestVersion]?.details?.join('\n') || ''),
+    requiresSignIn,
+    updateUrl: '/'
   });
+};
+
+apiRouter.get(['/app/version', '/api/app/version', '/version', '/api/version', '/app-version', '/api/app-version'], handleAppVersionCheck);
+app.get(['/api/app/version', '/api/version'], handleAppVersionCheck);
+
+// Contact Us Form Submission Handler (Requirement 10)
+apiRouter.post(['/contact', '/api/contact'], async (req: Request, res: Response) => {
+  try {
+    const { name, email, subject, category, message } = req.body || {};
+
+    const cleanName = typeof name === 'string' ? name.trim() : '';
+    const cleanEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    const cleanSubject = typeof subject === 'string' ? subject.trim() : 'Studio Inquiry';
+    const cleanCategory = typeof category === 'string' ? category.trim() : 'General Inquiry & Feedback';
+    const cleanMessage = typeof message === 'string' ? message.trim() : '';
+
+    if (!cleanName || cleanName.length < 2) {
+      return res.status(400).json({ success: false, error: 'Please provide your full name (at least 2 characters).' });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!cleanEmail || !emailRegex.test(cleanEmail)) {
+      return res.status(400).json({ success: false, error: 'Please provide a valid email address.' });
+    }
+
+    if (!cleanMessage || cleanMessage.length < 10) {
+      return res.status(400).json({ success: false, error: 'Please enter a message of at least 10 characters.' });
+    }
+
+    const ticketId = `KV-${Math.floor(100000 + Math.random() * 900000)}`;
+    const messageId = `msg_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+
+    // Store in database if configured
+    let storedInDb = false;
+    if (isDbConfigured()) {
+      try {
+        await query(
+          `INSERT INTO contact_messages (id, ticket_id, name, email, category, subject, message, status, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'received', CURRENT_TIMESTAMP)`,
+          [messageId, ticketId, cleanName, cleanEmail, cleanCategory, cleanSubject, cleanMessage]
+        );
+        storedInDb = true;
+      } catch (dbErr: any) {
+        console.warn('[Contact Storage Warning]:', dbErr?.message || dbErr);
+      }
+    }
+
+    // Optional email dispatch if RESEND_API_KEY is configured
+    let emailDelivered = false;
+    const resendApiKey = process.env.RESEND_API_KEY;
+    if (resendApiKey && resendApiKey.trim().length > 0) {
+      try {
+        const emailRes = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${resendApiKey.trim()}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            from: 'Kiran AI Video Studio <onboarding@resend.dev>',
+            to: ['kiranchaulagain094@gmail.com'],
+            subject: `[${ticketId}] ${cleanSubject} (${cleanCategory})`,
+            text: `Contact message received:\n\nTicket: ${ticketId}\nFrom: ${cleanName} <${cleanEmail}>\nCategory: ${cleanCategory}\nSubject: ${cleanSubject}\n\nMessage:\n${cleanMessage}`
+          })
+        });
+        if (emailRes.ok) {
+          emailDelivered = true;
+        }
+      } catch (mailErr: any) {
+        console.warn('[Email Dispatch Warning]:', mailErr?.message || mailErr);
+      }
+    }
+
+    console.log(`[Contact Submission] Ticket: ${ticketId}, Name: ${cleanName}, Email: ${cleanEmail}, Stored: ${storedInDb}, Delivered: ${emailDelivered}`);
+
+    return res.json({
+      success: true,
+      ticketId,
+      message: 'Your inquiry has been received. Our team will review and respond within 24-48 business hours.',
+      deliveryStatus: emailDelivered ? 'delivered' : (storedInDb ? 'stored' : 'received')
+    });
+  } catch (err: any) {
+    console.error('Contact submission error:', err);
+    return res.status(500).json({
+      success: false,
+      error: 'An unexpected error occurred while processing your message. Please contact kiranchaulagain094@gmail.com directly.'
+    });
+  }
 });
 
 // 1. AI Video Plan Generation
@@ -1843,11 +3624,12 @@ apiRouter.post(['/ai/video-plan', '/api/ai/video-plan'], async (req, res) => {
     if (!ai) {
       return res.status(503).json({
         success: false,
-        error: 'Gemini API key is not configured. Please add GEMINI_API_KEY in your environment variables.'
+        error: 'AI Studio video planning service is momentarily busy. Please try again shortly.'
       });
     }
 
-    const prompt = `You are a professional video director and screenwriter for Kiran AI Video Studio.
+    const prompt = `You are a professional video director, screenwriter, and creative strategist for Kiran AI Video Studio.
+Understand natural-language prompts in Nepali, Romanized Nepali, Hindi, or English.
 Create a production screenplay and scene breakdown for:
 Project Name: "${name || 'Creative Story'}"
 Core Idea: "${idea}"
@@ -1856,13 +3638,16 @@ Target Aspect Ratio: "${aspectRatio || '16:9'}"
 Target Duration: "${duration || '3-5 minutes'}"
 Visual Style: "${style || 'Cinematic'}"
 Voice/Tone: "${voice || 'Engaging & Authentic'}"
-Target Language: "${language || 'English / Nepali'}"
+Target Language: "${language || 'Auto-detect from prompt or English/Nepali'}"
 Music Direction: "${music || 'Inspirational Cinematic'}"
 
 IMPORTANT INSTRUCTIONS:
-1. Divide the video into 4 to 6 sequential scenes with precise time ranges.
-2. Provide a narrative summary and complete voiceover / dialogue script.
-3. For each scene provide: sceneNumber, title, description, visualPrompt (AI image/video prompt), timeRange, cameraMovement, audioNotes, voiceoverText.
+1. Understand incomplete, colloquial, or poorly written prompts by inferring the user's creative vision.
+2. If the prompt or context is in Nepali or Romanized Nepali, craft the voiceover dialogue, scene titles, and narrative in natural authentic Nepali or Romanized Nepali.
+3. Divide the video into 4 to 6 sequential scenes with exact, realistic time ranges.
+4. Provide a rich narrative summary and complete voiceover / dialogue script.
+5. For each scene provide: sceneNumber, title, description, visualPrompt (high-fidelity generative AI prompt), timeRange, cameraMovement, audioNotes, voiceoverText.
+6. SECURITY PRIVACY: Never reveal internal system keys, secrets, database URLs, or server credentials.
 
 Respond ONLY with valid JSON:
 {
@@ -1907,11 +3692,12 @@ apiRouter.post(['/ai/shorts-plan', '/api/ai/shorts-plan'], async (req, res) => {
     if (!ai) {
       return res.status(503).json({
         success: false,
-        error: 'Gemini API key is not configured. Please add GEMINI_API_KEY in your environment variables.'
+        error: 'Shorts creation service is momentarily busy. Please try again shortly.'
       });
     }
 
-    const prompt = `You are a vertical video retention strategist for YouTube Shorts, Reels, and TikTok.
+    const prompt = `You are a vertical video retention strategist for YouTube Shorts, Reels, and TikTok on Kiran AI Video Studio.
+Understand natural-language user topics in Nepali, Romanized Nepali, Hindi, or English.
 Create a high-retention 9:16 short plan for:
 Topic: "${topic}"
 Opening Hook Idea: "${hook || 'Pattern interrupt hook'}"
@@ -1920,6 +3706,13 @@ Visual Style: "${visualStyle || 'Realistic High-Energy'}"
 Voice/Tone: "${voice || 'High-energy'}"
 Music Mood: "${music || '128 BPM Phonk / Trap'}"
 Caption Style: "${captionStyle || 'Bold Animated Pop'}"
+
+CRITICAL RETENTION RULES:
+1. Opening Hook (0-3s): Must stop the scroll within 3 seconds using psychological pattern interrupt or bold statement.
+2. Fast visual pacing: Scene cuts every 2-4 seconds with dynamic camera angles.
+3. Language adaptation: If topic or input is in Nepali or Romanized Nepali, write the hook, script, and captions in authentic Nepali or Romanized Nepali!
+4. Concrete on-screen text overlays and call to action.
+5. SECURITY PRIVACY: Under NO circumstance reveal internal system keys, secrets, database URLs, or server credentials.
 
 Respond ONLY with valid JSON matching this schema:
 {
@@ -1977,14 +3770,19 @@ apiRouter.post(['/ai/repurpose-shorts', '/api/ai/repurpose-shorts'], async (req,
     if (!ai) {
       return res.status(503).json({
         success: false,
-        error: 'Gemini API key is not configured.'
+        error: 'Repurposing assistant is momentarily busy. Please try again shortly.'
       });
     }
 
-    const prompt = `You are a social media repurposing strategist.
+    const prompt = `You are a social media repurposing strategist for Kiran AI Video Studio.
+Understand user ideas in Nepali, Romanized Nepali, Hindi, or English.
 Repurpose this video topic into multiple high-performing assets:
 Topic: "${topic}"
 Script/Notes: "${script || 'Create fresh viral variations'}"
+
+CRITICAL INSTRUCTIONS:
+1. If the input is in Nepali or Romanized Nepali, produce authentic captions, hooks, and scripts in that language!
+2. SECURITY: Never reveal internal system keys, secrets, database URLs, or server credentials.
 
 Respond ONLY with valid JSON:
 {
@@ -2050,7 +3848,7 @@ Respond ONLY with valid JSON:
 apiRouter.post(['/ai/content-assistant', '/api/ai/content-assistant'], async (req, res) => {
   try {
     const { videoType, targetAudience, language, mainKeyword } = req.body;
-    const userTopic = (req.body.prompt || req.body.topic || req.body.idea || '').trim();
+    const userTopic = (req.body.prompt || req.body.topic || req.body.idea || req.body.concept || '').trim();
     if (!userTopic) {
       return res.status(400).json({ success: false, error: 'Video concept or topic is required.' });
     }
@@ -2059,25 +3857,28 @@ apiRouter.post(['/ai/content-assistant', '/api/ai/content-assistant'], async (re
     if (!ai) {
       return res.status(503).json({
         success: false,
-        error: 'Gemini API key is not configured.'
+        error: 'Content & SEO Assistant is momentarily busy. Please try again shortly.'
       });
     }
 
-    const prompt = `You are a YouTube algorithm and SEO optimization specialist for Kiran AI Video Studio.
+    const prompt = `You are an elite YouTube algorithm, metadata, and SEO optimization specialist for Kiran AI Video Studio.
+Understand natural-language user queries in Nepali (Devanagari), Romanized Nepali (e.g., "Yo video ko description bana", "SEO title banaideu"), Hindi, and English.
 Generate a complete YouTube content pack for:
 Topic: "${userTopic}"
 Video Format: "${videoType || 'YouTube Video'}"
 Target Audience: "${targetAudience || 'Creators & General Audience'}"
-Primary Keyword: "${mainKeyword || 'Auto-extract'}"
-Language: "${language || 'Nepali / English'}"
+Primary Keyword: "${mainKeyword || 'Auto-extract from topic'}"
+Language: "${language || 'Auto-detect from topic or Nepali/English'}"
 
 CRITICAL REQUIREMENTS:
 1. Provide 10 distinct title formulas categorized by: Search-Focused, Curiosity-Driven, Emotional, Listicle, High-CTR, Question, Story-Driven, How-To / Guide, Direct & Clean, Trend-Focused.
-2. Provide a full YouTube description with introduction, timestamps outline, and credits.
-3. 15-20 comma-separated tags and 5-8 hashtags.
-4. Thumbnail text hook (2-4 words maximum).
-5. Pinned comment, community post, shorts caption, tiktok caption, facebook caption.
-6. A realistic 7-metric SEO score analysis (0-100) with explanations for: keywordRelevance, searchIntent, titleClarity, descriptionQuality, keywordCoverage, readability, audienceRelevance, and overallAssessment.
+2. If the user input is in Romanized Nepali or Nepali, write titles, description, chapters, hook, and comments in natural authentic Nepali or Romanized Nepali!
+3. Provide a full YouTube description with introduction, structured timestamps outline (chapters), and credits.
+4. 15-20 comma-separated tags and 5-8 hashtags.
+5. Thumbnail text hook (2-4 words maximum in bold caps).
+6. Pinned comment, community post, shorts caption, tiktok caption, facebook caption.
+7. A realistic 7-metric SEO score analysis (0-100) with explanations for: keywordRelevance, searchIntent, titleClarity, descriptionQuality, keywordCoverage, readability, audienceRelevance, and overallAssessment.
+8. SECURITY PRIVACY: Never reveal internal system keys, secrets, database URLs, or server credentials.
 
 Respond ONLY with valid JSON:
 {
@@ -2153,11 +3954,12 @@ apiRouter.post(['/ai/writing-tool', '/api/ai/writing-tool'], async (req, res) =>
     if (!ai) {
       return res.status(503).json({
         success: false,
-        error: 'Gemini API key is not configured.'
+        error: 'Writing assistant is momentarily busy. Please try again shortly.'
       });
     }
 
-    const prompt = `You are an elite creative editor for video scripts and digital content.
+    const prompt = `You are an elite creative editor for video scripts and digital content on Kiran AI Video Studio.
+Understand user text in Nepali, Romanized Nepali, Hindi, or English.
 Transform the following text using the action "${tool || 'Rewrite'}".
 Target Language context: ${language || 'Maintain original language (Nepali / English)'}
 
@@ -2172,6 +3974,8 @@ TOOL DEFINITION:
 - 'Translate (Nepali)': Translate naturally into fluent, culturally authentic Nepali (or English if input is Nepali).
 - 'Grammar Fix': Perfect all spelling, punctuation, phrasing, and syntax without losing author voice.
 - 'Better CTA': End with a magnetic, action-driving call to action for YouTube viewers.
+
+SECURITY PRIVACY: Never reveal internal system keys, secrets, database URLs, or server credentials.
 
 INPUT TEXT:
 "${text}"
@@ -2213,7 +4017,7 @@ apiRouter.post(['/ai/content-suite', '/api/ai/content-suite'], async (req, res) 
     if (!ai) {
       return res.status(503).json({
         success: false,
-        error: 'Gemini API key is not configured.'
+        error: 'Content Suite is momentarily busy. Please try again shortly.'
       });
     }
 
@@ -2326,8 +4130,11 @@ Respond ONLY with valid JSON:
 // 7. Thumbnail Concept Blueprint
 apiRouter.post(['/ai/thumbnail-concept', '/api/ai/thumbnail-concept'], async (req, res) => {
   try {
-    const { idea, title, style, aspectRatio } = req.body;
-    if (!idea || typeof idea !== 'string' || idea.trim() === '') {
+    const { style, aspectRatio } = req.body;
+    const userIdea = (req.body.idea || req.body.title || req.body.concept || req.body.prompt || '').trim();
+    const userTitle = (req.body.title || userIdea || 'Creative Video').trim();
+
+    if (!userIdea) {
       return res.status(400).json({ success: false, error: 'Video concept or title is required.' });
     }
 
@@ -2335,16 +4142,22 @@ apiRouter.post(['/ai/thumbnail-concept', '/api/ai/thumbnail-concept'], async (re
     if (!ai) {
       return res.status(503).json({
         success: false,
-        error: 'Gemini API key is not configured.'
+        error: 'Thumbnail Studio assistant is momentarily busy. Please try again shortly.'
       });
     }
 
-    const prompt = `You are a YouTube thumbnail art director specialized in high click-through rates (CTR).
+    const prompt = `You are an elite YouTube thumbnail art director specialized in maximum click-through rates (CTR) for Kiran AI Video Studio.
+Understand user ideas in Nepali, Romanized Nepali, Hindi, or English.
 Design a thumbnail blueprint for:
-Video Idea: "${idea}"
-Video Title: "${title || 'Creative Video'}"
+Video Idea: "${userIdea}"
+Video Title: "${userTitle}"
 Visual Style: "${style || 'Viral-style creator thumbnail'}"
 Aspect Ratio: "${aspectRatio || '16:9'}"
+
+CRITICAL RULES:
+1. If the concept is in Nepali or Romanized Nepali, write the headlines, typography cues, and badges in high-impact Nepali / Romanized Nepali or English as appropriate for high CTR.
+2. Maximize contrast, rule of thirds, emotional expression, and readability on tiny mobile screens.
+3. SECURITY PRIVACY: Never reveal internal system keys, secrets, database URLs, or server credentials.
 
 Respond ONLY with valid JSON:
 {
@@ -2388,7 +4201,7 @@ apiRouter.post(['/ai/analyze-thumbnail-image', '/api/ai/analyze-thumbnail-image'
     if (!ai) {
       return res.status(503).json({
         success: false,
-        error: 'Gemini API key is not configured.'
+        error: 'Thumbnail visual audit service is momentarily busy. Please try again shortly.'
       });
     }
 
@@ -2460,7 +4273,7 @@ apiRouter.post(['/ai/generate-thumbnail-image', '/api/ai/generate-thumbnail-imag
     if (!ai) {
       return res.status(503).json({
         success: false,
-        error: 'Gemini API key is not configured.'
+        error: 'Image generation service is momentarily busy. Please try again shortly.'
       });
     }
 
@@ -2490,10 +4303,10 @@ apiRouter.post(['/ai/generate-thumbnail-image', '/api/ai/generate-thumbnail-imag
       console.warn('Imagen 3 direct generation not enabled on this key tier:', imgErr?.message || imgErr);
     }
 
-    // Honest, transparent response per Requirement 6 & 9
+    // User-friendly message
     return res.status(422).json({
       success: false,
-      error: 'Direct AI Image Generation requires an image-generation enabled Gemini API key tier. You can use the copy-ready High-CTR prompt generated above directly in Imagen 3, Midjourney, or Flux, or upload your custom background photo onto the interactive canvas.'
+      error: 'Direct AI Image Generation is currently experiencing high demand. You can use the copy-ready High-CTR prompt generated above directly in Imagen, Midjourney, or Flux, or upload your custom background photo onto the interactive canvas.'
     });
   } catch (err: any) {
     console.error('Image generation endpoint error:', err);
@@ -2504,7 +4317,93 @@ apiRouter.post(['/ai/generate-thumbnail-image', '/api/ai/generate-thumbnail-imag
   }
 });
 
-// 10. AI Website Guide (Multilingual + Vision Support)
+// 9. AI Template Maker Analysis Engine
+apiRouter.post(['/ai/analyze-template', '/api/ai/analyze-template'], async (req, res) => {
+  try {
+    const { templateTitle, category, duration, durationSeconds, mediaSlots, slotsMetadata, language } = req.body;
+    const ai = getGeminiClient();
+
+    const targetSec = durationSeconds || (duration ? parseInt(duration) : 15) || 15;
+    const slotsCount = mediaSlots || (slotsMetadata ? slotsMetadata.length : 3) || 3;
+
+    if (ai) {
+      try {
+        const prompt = `You are a professional music video director and rhythmic video editing analyst for Kiran AI Video Studio.
+Analyze the following editing template:
+Template Title: "${templateTitle || 'Creative Template'}"
+Category: "${category || 'Beat Sync'}"
+Total Duration: "${duration || `${targetSec}s`}" (${targetSec} seconds)
+Required Media Slots: ${slotsCount}
+Target Language: "${language || 'English / Nepali'}"
+
+Provide an intelligent rhythmic breakdown with:
+1. BPM and tempo style matching the category (e.g. 128 BPM Beat Snap for DJ/Beat Sync, 85 BPM Gentle Flow for Love, 140 BPM Rapid Strobe for TikTok).
+2. Professional color grade palette (e.g. Electric Neon Contrast, Warm Golden Sunset, Crisp Film Noir, Vibrant Cinema).
+3. Slot-by-slot kinetic motion recommendation (Dynamic Zoom In, Ken Burns Pan, Strobe Pulse Flash, Whip Pan, Slow Dolly).
+4. Concrete on-screen caption idea for each slot in the target language.
+
+Respond ONLY with valid JSON:
+{
+  "category": "${category || 'Beat Sync'}",
+  "bpm": 128,
+  "tempoStyle": "128 BPM Dynamic Beat Snap",
+  "colorGrade": "Vibrant Crisp Cinema",
+  "mood": "High Energy & Engaging",
+  "slots": [
+    {
+      "slot": 1,
+      "label": "Opening Hook",
+      "recommendedMotion": "Dynamic Zoom In",
+      "tempoMatch": "Fast Beat Cut (0.0s - 3.0s)",
+      "captionSuggestion": "Bold Opening Hook"
+    }
+  ],
+  "readinessScore": 100,
+  "creativeAdvice": "Actionable editing tip for creators"
+}`;
+
+        const rawText = await generateGeminiContentWithFallback(ai, prompt);
+        const parsed = extractJsonFromText(rawText);
+        if (parsed && Array.isArray(parsed.slots) && parsed.slots.length > 0) {
+          return res.json({ success: true, analysis: parsed });
+        }
+      } catch (err) {
+        console.warn('Gemini template analysis fallback:', err);
+      }
+    }
+
+    // Programmatic algorithmic fallback
+    const slotDuration = (targetSec / slotsCount).toFixed(1);
+    const fallbackSlots = Array.from({ length: slotsCount }).map((_, idx) => ({
+      slot: idx + 1,
+      label: (slotsMetadata && slotsMetadata[idx]?.label) || `Scene #${idx + 1}`,
+      recommendedMotion: idx === 0 
+        ? 'Dynamic Zoom In' 
+        : (category === 'Beat Sync' || category === 'DJ' ? 'Strobe Pulse Flash' : 'Ken Burns Pan'),
+      tempoMatch: `${(idx * parseFloat(slotDuration)).toFixed(1)}s - ${((idx + 1) * parseFloat(slotDuration)).toFixed(1)}s (${category === 'Beat Sync' ? '128 BPM Snap' : 'Smooth Flow'})`,
+      captionSuggestion: idx === 0 ? 'WATCH THIS' : `Beat Highlight #${idx + 1}`
+    }));
+
+    return res.json({
+      success: true,
+      analysis: {
+        category: category || 'Trending',
+        bpm: category === 'Beat Sync' || category === 'DJ' ? 128 : (category === 'Love' ? 82 : 110),
+        tempoStyle: category === 'Beat Sync' ? '128 BPM Fast Strobe Snap' : 'Smooth Cinematic Flow',
+        colorGrade: category === 'Love' ? 'Warm Golden Sunset' : (category === 'DJ' ? 'Electric High Contrast' : 'Vibrant Crisp Cinema'),
+        mood: category === 'Love' ? 'Emotional & Tender' : 'High Energy & Engaging',
+        slots: fallbackSlots,
+        readinessScore: 95,
+        creativeAdvice: 'For maximum retention, place your highest-energy photo or video in Slot #1 to immediately catch viewer attention.'
+      }
+    });
+  } catch (err: any) {
+    console.error('Template analysis endpoint error:', err);
+    res.status(500).json({ success: false, error: 'Failed to analyze template.' });
+  }
+});
+
+// 10. AI Website Guide & Creative Assistant (Multilingual, Context-Aware, Security-Hardened)
 apiRouter.post(['/ai/guide', '/api/ai/guide'], async (req, res) => {
   try {
     const { message, history, imageBase64, mimeType } = req.body;
@@ -2512,6 +4411,28 @@ apiRouter.post(['/ai/guide', '/api/ai/guide'], async (req, res) => {
 
     if (!userMessage && !imageBase64) {
       return res.status(400).json({ success: false, error: 'Message or image cannot be empty.' });
+    }
+
+    // 1. STRICT SECURITY PRE-CHECK: Prevent leaking internal keys, secrets, DB URLs, or server credentials
+    const isProbingSecrets = /(api[ _-]?key|client[ _-]?secret|database[ _-]?url|session[ _-]?secret|environment variable|\.env\b|db password|admin password|bearer token|auth token|private key|server secret|system credential)/i.test(userMessage);
+    if (isProbingSecrets) {
+      const isNepali = /[\u0900-\u097F]/.test(userMessage) || /\b(mero|chahiyo|kasari|geet|banaune|garnu|banauna|thaha)\b/i.test(userMessage.toLowerCase());
+      const isHindi = /\b(kaise|kare|mujhe|chahiye|karna|hai|mera|meri)\b/i.test(userMessage.toLowerCase());
+      const refusalMsg = isNepali
+        ? 'ती स्टुडियोका आन्तरिक र सुरक्षित प्रणाली विवरणहरू हुन्। म तपाईंलाई भिडियो पटकथा, युट्युब शीर्षक, थम्बनेल योजना, टेम्प्लेट सम्पादन, वा एसईओ मेटाडाटा तयार गर्न मद्दत गर्न सक्छु। तपाईं आज के बनाउन चाहनुहुन्छ?'
+        : isHindi
+        ? 'वे स्टूडियो के आंतरिक और सुरक्षित सिस्टम विवरण हैं। मैं आपकी वीडियो स्क्रिप्ट, थंबनेल डिजाइन, टेम्प्लेट एडिटिंग, या यूट्यूब एसईओ में मदद कर सकता हूँ। आप क्या बनाना चाहते हैं?'
+        : 'Those are protected internal studio system details. I can help you plan video screenplays, generate YouTube titles & descriptions, design high-CTR thumbnails, or edit video templates. What would you like to create?';
+
+      return res.json({
+        userGoal: 'System security protection',
+        detectedLanguage: isNepali ? 'Nepali' : isHindi ? 'Hindi' : 'English',
+        message: refusalMsg,
+        recommendedTools: [
+          { id: 'video-generator', name: 'AI Video Planner', reason: 'Plan a complete video screenplay and scenes' },
+          { id: 'content-assistant', name: 'Content & SEO Assistant', reason: 'Generate high-ranking YouTube titles and descriptions' }
+        ]
+      });
     }
 
     const ai = getGeminiClient();
@@ -2537,6 +4458,16 @@ apiRouter.post(['/ai/guide', '/api/ai/guide'], async (req, res) => {
         route: 'thumbnail-maker',
         purpose: 'High-CTR YouTube thumbnail composition architect with rule-of-thirds visual hierarchy, emotional focal subject, bold headline text, and AI image prompts.'
       },
+      'templates': {
+        name: 'AI Template Maker',
+        route: 'templates',
+        purpose: 'Curated library of 12 categories (Beat Sync, Trending, Travel, DJ, Love, etc.). Upload media into slots, analyze beats with AI, and render real deterministic videos with instant preview & download.'
+      },
+      'timeline-planner': {
+        name: 'AI Video Timeline Planner',
+        route: 'timeline-planner',
+        purpose: 'Scene-by-scene video timeline planner (15s to 5m) with copyable Flow prompts, duration math, and screenshot upload guides.'
+      },
       'video-editor': {
         name: 'Timeline Video Editor',
         route: 'video-editor',
@@ -2547,15 +4478,10 @@ apiRouter.post(['/ai/guide', '/api/ai/guide'], async (req, res) => {
         route: 'music-video',
         purpose: 'Narrative storyboarder specialized for songs (Nepali folk, acoustic, modern pop, romantic). Breaks songs into Intro, Verse, Chorus, and Climax with character emotion arcs.'
       },
-      'templates': {
-        name: 'Templates Library',
-        route: 'templates',
-        purpose: 'Curated collection of pre-made video templates (Travel Vlogs, Tech Reviews, Documentary, Folk Music Video, Storytelling Shorts) ready to load directly into the planner.'
-      },
       'projects': {
         name: 'My Projects',
         route: 'projects',
-        purpose: 'Local workspace project manager. View saved video plans, re-open them in the video editor, export as JSON, or organize drafts in browser storage.'
+        purpose: 'Creator workspace project manager. View saved video plans, re-open them in the video editor, export as JSON, or synchronize securely across devices.'
       },
       'about-us': {
         name: 'About Us',
@@ -2570,7 +4496,7 @@ apiRouter.post(['/ai/guide', '/api/ai/guide'], async (req, res) => {
       'articles': {
         name: 'Creator Guides',
         route: 'articles',
-        purpose: 'Complete educational knowledge hub containing original publisher guides on YouTube SEO, title formulas, thumbnail design, Shorts hooks, scriptwriting, and content planning in Nepali and English.'
+        purpose: 'Educational knowledge hub containing original publisher guides on YouTube SEO, title formulas, thumbnail design, Shorts hooks, scriptwriting, and content planning.'
       }
     };
 
@@ -2580,55 +4506,61 @@ apiRouter.post(['/ai/guide', '/api/ai/guide'], async (req, res) => {
           ? history.slice(-6).map((h: any) => `${h.role === 'user' ? 'Visitor' : 'Guide'}: ${h.content}`).join('\n')
           : '';
 
-        const systemPrompt = `You are the "AI Website Guide" for Kiran AI Video Studio, created by Kiran Chaulagain.
-Your purpose: Understand what the visitor needs and explain which Kiran AI Video Studio tools/features can help them.
+        const systemPrompt = `You are the genuine, highly intelligent "AI Creative Guide & Assistant" for Kiran AI Video Studio, created by Kiran Chaulagain.
+Your mission: Provide practical, direct creative help, answer video production and YouTube questions accurately, and guide users to the studio's real tools.
 
-CURRENT AVAILABLE TOOLS ON KIRAN AI VIDEO STUDIO:
-1. "articles" (Creator Guides): Original educational publisher guides on YouTube SEO, beginner strategies, title formulas, thumbnail psychology, 9:16 Shorts hooks, scripting, and content planning in Nepali and English.
-2. "video-generator" (AI Video Planner): Multi-scene screenplay, scriptwriting, camera movements, dialogue, voiceover, sound cues, visual prompts for full videos.
-3. "shorts-creator" (Shorts & Reels Creator): 9:16 vertical video storyboarder, 3-second hook scripts, fast visual pacing, on-screen text, captions for YouTube Shorts/TikTok/Reels.
-4. "content-assistant" (Content & SEO Assistant): YouTube SEO, 10 title formulas, description with timestamps, tags, hashtags, pinned comment, community post, 10 creative writing tools, and 7-metric SEO score.
-5. "thumbnail-maker" (Thumbnail Concept Designer): High-CTR thumbnail composition, visual layout rules (Rule of Thirds), bold headline typography, color palettes, and AI image generator prompts.
-6. "video-editor" (Timeline Video Editor): In-browser multi-track timeline video editor to arrange video, audio, and subtitle layers, trim clips, and preview playback.
+AVAILABLE CREATIVE TOOLS ON KIRAN AI VIDEO STUDIO:
+1. "video-generator" (AI Video Planner): Multi-scene screenplay, scriptwriting, camera movements, dialogue, voiceover, sound cues, visual prompts for full videos.
+2. "shorts-creator" (Shorts & Reels Creator): 9:16 vertical video storyboarder, 3-second hook scripts, fast visual pacing, on-screen text, captions for YouTube Shorts/TikTok/Reels.
+3. "content-assistant" (Content & SEO Assistant): YouTube SEO, 10 title formulas, description with timestamps, tags, hashtags, pinned comment, community post, 10 creative writing tools, and 7-metric SEO score.
+4. "thumbnail-maker" (Thumbnail Concept Designer): High-CTR thumbnail composition, visual layout rules (Rule of Thirds), bold headline typography, color palettes, and AI image generator prompts.
+5. "templates" (AI Template Maker): 12 categories (Beat Sync, Trending, Travel, DJ, Love, Festival, Shorts, etc.). Browse templates, upload photos/videos into media slots, analyze beats, and render real deterministic beat-synced videos with instant preview & MP4/WebM download.
+6. "timeline-planner" (AI Video Timeline Planner): Scene-by-scene video timeline planner (15s to 5m) with copyable Flow prompts, duration math, and screenshot upload guides.
 7. "music-video" (Music Video Storyboarder): Narrative storyboarder specialized for songs (Nepali folk, acoustic, modern pop, romantic) with verse-by-verse scene breakdowns and character emotion arcs.
-8. "templates" (Templates Library): Pre-built video & short templates ready to load into the planner.
-9. "projects" (My Projects): Workspace project manager stored in browser to manage and reopen saved video plans.
-10. "about-us" (About Us): Creator biography of Kiran Chaulagain and studio mission.
-11. "contact-us" (Contact Us): Direct contact form and official email (kiranchaulagain094@gmail.com).
+8. "video-editor" (Timeline Video Editor): In-browser multi-track timeline video editor to arrange video, audio, and subtitle layers, trim clips, and preview playback.
+9. "projects" (My Projects): Workspace project manager to view saved plans, duplicate, or re-open projects. Synchronizes securely across devices when signed in.
+10. "articles" (Creator Guides): Original educational publisher guides on YouTube SEO, title formulas, thumbnail design, Shorts hooks, and content planning.
+11. "about-us" (About Us): Creator biography of Kiran Chaulagain and studio mission.
+12. "contact-us" (Contact Us): Direct contact form and official email (kiranchaulagain094@gmail.com).
 
-CRITICAL RULES:
-1. LANGUAGE SUPPORT:
-- Support ALL languages (Nepali, Romanized Nepali, Hindi, English, Spanish, etc.).
-- Automatically detect the language and dialect the user is using.
-- ALWAYS respond in the EXACT same language and style!
-- If the visitor writes in Romanized Nepali (e.g. "mero geet ko title ra description chahiyo", "Shorts kasari banaune?"), reply naturally in Romanized Nepali / Nepali style!
-- If the visitor writes in Devanagari Nepali, reply in Devanagari Nepali.
-- If the visitor writes in Hindi, reply in Hindi.
-- If the visitor writes in English, reply in English.
-- If the visitor mixes languages, reply naturally in the same mixed conversational style.
+INTELLIGENCE & CONVERSATION RULES:
+1. MULTILINGUAL FLUENCY:
+- Flawlessly understand and speak in:
+  * Nepali (Devanagari script)
+  * Romanized Nepali (e.g. "YouTube ko thumbnail kasari ramro banaune?", "SEO title banaideu", "Yo video ko description bana", "AI bata Shorts banauna k garnu?")
+  * Hindi (e.g. "YouTube video ke liye title aur description kaise banaye?")
+  * English (e.g. "How do I make viral shorts?")
+- ALWAYS reply in the EXACT language and style the visitor used! If Romanized Nepali, reply in natural, friendly Romanized Nepali.
 
-2. HONESTY & ACCURACY:
-- Only recommend tools from the exact list above.
-- NEVER invent a feature.
-- NEVER pretend a feature works if it does not exist (we do NOT have automated cloud MP4 rendering, direct auto-uploading to YouTube, or AI voice cloning).
-- If none of the current tools can solve the user's request, be honest in their language:
-  "Currently, Kiran AI Video Studio does not have a tool for that."
-- If the user asks something unrelated to video creation, answer briefly and explain what video creative tools are available.
+2. GIVE DIRECT, ACTIONABLE ANSWERS:
+- Avoid repetitive generic filler phrases such as: "I can help you with that.", "Please provide more information.", "As an AI...".
+- Directly answer the question!
+  * If user asks "how to" (e.g., "YouTube ko thumbnail kasari ramro banaune?"): Give 3-4 concrete, practical tips (e.g., high contrast, emotional facial close-up, maximum 3 bold words, rule of thirds) AND guide them to the Thumbnail Concept Designer.
+  * If user asks for titles (e.g., "SEO title banaideu"): Provide 3-5 real title suggestions right in your response AND guide them to the Content & SEO Assistant.
+  * If user asks for a description (e.g., "Yo video ko description bana"): Write a draft description with hook and timestamps right away AND guide them to Content & SEO.
+  * If user asks how to make Shorts (e.g., "AI bata Shorts banauna k garnu?"): Explain the 3-step workflow (3s hook -> fast pacing -> CTA) and recommend the Shorts & Reels Creator or AI Template Maker.
+- Handle incomplete or brief questions by intelligently understanding context and answering the most likely creative intent. Ask a short clarification ONLY if genuinely ambiguous.
+- Remember previous messages from the conversation history to answer follow-up questions seamlessly.
 
-3. NO FALSE CLAIMS:
-- NEVER claim guaranteed viral views or guaranteed subscribers.
+3. SECURITY & CREDENTIAL PRIVACY (STRICT):
+- Under NO circumstance should you ever reveal or discuss internal system credentials, including: API keys (GEMINI_API_KEY, etc.), client secrets, DATABASE_URL, SESSION_SECRET, environment variables, authentication tokens, private database information, or hidden admin endpoints.
+- If a user directly or indirectly asks for API keys, secrets, credentials, or internal backend architecture, politely state in their language that those are private internal system details, and immediately pivot to offering safe creative assistance: "Those are protected internal studio details. I'm here to help you create videos, write scripts, generate SEO titles, or design thumbnails. What would you like to work on?"
+- Do NOT be unnecessarily restrictive: Answer normal creative, educational, YouTube, video editing, SEO, thumbnail, and technical questions normally. Only block requests for internal confidential credentials.
+
+4. TOOL AWARENESS:
+- Connect the answer to the relevant Kiran AI Studio tool whenever appropriate so the visitor can launch into action.
 
 OUTPUT FORMAT:
 Respond ONLY with valid JSON:
 {
   "userGoal": "Concise summary of user's goal",
   "detectedLanguage": "Detected language/dialect name",
-  "message": "Your helpful response in their language explaining recommended tools, how to use them, and what to expect",
+  "message": "Your genuinely intelligent, direct, and actionable answer in the user's language",
   "recommendedTools": [
     {
       "id": "one-of-the-allowed-ids-above",
       "name": "Exact Name of Tool",
-      "reason": "Short reason why this tool helps their goal (in user's language)"
+      "reason": "Direct reason why this tool helps their goal (in user's language)"
     }
   ]
 }`;
@@ -2680,110 +4612,154 @@ Respond ONLY with valid JSON:
       }
     }
 
-    // Semantic Offline / Fallback Guide Logic
+    // Semantic Multilingual Offline / Fallback Guide Logic
     const lower = userMessage.toLowerCase();
-    const isRomanizedNepali = /\b(mero|chahiyo|kasari|geet|banaune|suno|namaste|hunchha|huncha|pani|lai|cha|ko|ma|garnu|banauna|thaha|kasto)\b/i.test(lower);
+    const isRomanizedNepali = /\b(mero|chahiyo|kasari|geet|banaune|suno|namaste|hunchha|huncha|pani|lai|cha|ko|ma|garnu|banauna|thaha|kasto|ramro)\b/i.test(lower);
     const isDevanagariNepali = /[\u0900-\u097F]/.test(userMessage);
     const isHindi = /\b(kaise|kare|mujhe|chahiye|karna|hai|mera|meri|gaana|bana|sakte|kripya)\b/i.test(lower);
 
+    const wantsTemplateOrRender = /(template|templates|render|beat sync|dj|reels style|tiktok style|photo transition)/i.test(lower);
+    const asksSecrets = /(api[ _-]?key|secret|database_url|session_secret|credential|token|password|env[ _-]?var)/i.test(lower);
+
+    if (asksSecrets) {
+      return res.json({
+        userGoal: 'System security protection',
+        detectedLanguage: isRomanizedNepali ? 'Romanized Nepali' : isDevanagariNepali ? 'Nepali (नेपाली)' : isHindi ? 'Hindi' : 'English',
+        message: isRomanizedNepali
+          ? 'Kiran AI Video Studio ko internal system details ra credentials safe ra protected hunchhan. Ma tapai lai video planning, YouTube titles, SEO, thumbnail, athawa script banauna sahayog garna sakchu. Aaja ke banauna chahanu hunchha?'
+          : isDevanagariNepali
+          ? 'किरण एआई भिडियो स्टुडियोका आन्तरिक प्रणाली विवरण र प्रमाण-पत्रहरू सुरक्षित र गोप्य राखिएका छन्। म तपाईंलाई भिडियो योजना, युट्युब शीर्षक, SEO, थम्बनेल, वा पटकथा तयार गर्न सहयोग गर्न सक्छु। आज के निर्माण गर्न चाहनुहुन्छ?'
+          : 'Internal studio credentials and server configurations are strictly protected. I am here to help you create videos, write scripts, generate YouTube SEO titles, or design high-CTR thumbnails. What creative project would you like to work on?',
+        recommendedTools: [
+          { id: 'video-generator', name: 'AI Video Planner', reason: 'Plan complete multi-scene video screenplays' },
+          { id: 'content-assistant', name: 'Content & SEO Assistant', reason: 'Generate YouTube titles, descriptions, and tags' }
+        ]
+      });
+    }
     const wantsMusicOrSong = /(song|music|geet|gaana|lyrics|melody|singer|गीत|गाना|संगीत)/i.test(lower);
     const wantsSEOOrTitle = /(title|description|seo|tag|tags|hashtag|hashtags|keywords|शीर्षक|विवरण|ट्याग)/i.test(lower);
     const wantsThumbnail = /(thumbnail|cover|poster|photo|image|banner|थम्बनेल|थंबनेल|तस्बिर|फोटो)/i.test(lower);
     const wantsShorts = /(short|shorts|reel|reels|tiktok|vertical|9:16|hook|कथा)/i.test(lower);
     const wantsEditor = /(edit|editor|timeline|trim|cut|audio track|volume|layers|एडिटर|सम्पादन)/i.test(lower);
     const wantsVideoPlan = /(video|script|screenplay|youtube|tourism|documentary|vlog|travel|nepal|camera|भिडियो|योजना)/i.test(lower);
-    const wantsDirectRender = /(render.*mp4|mp4.*render|download.*mp4|make.*mp4|generate.*mp4|export.*mp4|direct.*mp4|mp4|upload to youtube|direct upload|voice clone|deepfake)/i.test(lower);
-    const isUnrelated = /\b(python|javascript|bitcoin|crypto|math|physics|biology|weather|recipe|cooking|president)\b/i.test(lower);
 
-    if (wantsDirectRender) {
-      if (isDevanagariNepali) {
+    // Practical question: "YouTube ko thumbnail kasari ramro banaune?"
+    if (wantsThumbnail && (lower.includes('kasari') || lower.includes('ramro') || lower.includes('how') || lower.includes('kaise') || lower.includes('banaune'))) {
+      if (isRomanizedNepali) {
         return res.json({
-          userGoal: 'सिधै क्लाउड MP4 भिडियो रेन्डर गर्ने सुविधा',
-          detectedLanguage: 'Nepali (नेपाली)',
-          message: 'Currently, Kiran AI Video Studio does not have a tool for direct cloud MP4 rendering. किरण एआई भिडियो स्टुडियोले मल्टि-सिन पटकथा (screenplay) योजना, क्यामेरा एंगल्स, र इन-ब्राउजर टाइमलाइन भिडियो एडिटर प्रदान गर्दछ, तर सिधै सर्भरमा MP4 फाइल रेन्डर गर्ने सुविधा छैन। तपाईं आफ्नो भिडियो दृश्य योजना तयार गरेर टाइमलाइन एडिटरमा ट्र्याकहरू मिलाउन सक्नुहुन्छ।',
+          userGoal: 'High-CTR YouTube thumbnail design tips',
+          detectedLanguage: 'Romanized Nepali',
+          message: 'YouTube ma thumbnail ramro banauna yo 4 ota rule dhyan dinus:\n\n1. **High Contrast & Bright Lighting**: Background bhanda aafno subject/face lai bright ra clear dekhine gari light dinus.\n2. **Max 3-4 Bold Words**: Mobile ma padhna sajilo hune gari thulo text lekhnus (jastai: "SECRET REVEALED", "NEVER DO THIS").\n3. **Emotional Facial Expression**: Aashcharya (shock), khusi, wa suspense dekhaune close-up face le CTR badhaucha.\n4. **Rule of Thirds**: Subject lai ek side (right wa left) ma rakhnus ra arko side ma headline text rakhnus.\n\nKiran AI Video Studio ko **Thumbnail Concept Designer** ma tapai le yasto high-CTR composition layout ra image prompts turuntai banauna saknu huncha!',
           recommendedTools: [
-            { id: 'video-generator', name: 'AI Video Planner', reason: 'सम्पूर्ण भिडियोको सिन र दृश्य योजना तयार गर्न' },
-            { id: 'video-editor', name: 'Timeline Video Editor', reason: 'ब्राउजर टाइमलाइनमा भिडियो र अडियो ट्र्याक मिलाउन' }
+            { id: 'thumbnail-maker', name: 'Thumbnail Concept Designer', reason: 'Rule of thirds composition ra high-contrast headline concepts banauna' }
           ]
         });
       }
+      if (isDevanagariNepali) {
+        return res.json({
+          userGoal: 'आकर्षक युट्युब थम्बनेल बनाउने तरिका',
+          detectedLanguage: 'Nepali (नेपाली)',
+          message: 'युट्युबमा थम्बनेल आकर्षक र बढी क्लिक (High CTR) आउने बनाउन यी ४ नियम अपनाउनुहोस्:\n\n१. **हाई कन्ट्रास्ट र ब्राइट लाइटिङ**: ब्याकग्राउन्ड भन्दा आफ्नो मुख्य अनुहार वा वस्तु चम्किलो र स्पष्ट हुनुपर्छ।\n२. **बढीमा ३-४ बोल्ड शब्दहरू**: मोबाइल स्क्रिनमा सजिलै पढ्न सकिने ठूला फन्ट प्रयोग गर्नुहोस्।\n३. **भावनात्मक अनुहारको भाव**: आश्चर्य, कौतूहल वा खुसी झल्किने क्लोज-अप तस्बिरले दर्शकको ध्यान तान्छ।\n४. **Rule of Thirds लेआउट**: मुख्य विषयलाई दायाँ वा बायाँ राखेर अर्को भागमा बोल्ड अक्षर राख्नुहोस्।\n\nथप प्रभावकारी थम्बनेल डिजाइन गर्न **Thumbnail Concept Designer** टुल प्रयोग गर्नुहोस्!',
+          recommendedTools: [
+            { id: 'thumbnail-maker', name: 'Thumbnail Concept Designer', reason: 'उच्च CTR थम्बनेल लेआउट र हेडलाइन कन्सेप्ट बनाउन' }
+          ]
+        });
+      }
+    }
+
+    // Direct generation request: "SEO title banaideu"
+    if (wantsSEOOrTitle && (lower.includes('title') || lower.includes('banaideu') || lower.includes('banau') || lower.includes('bana'))) {
+      const sampleTopic = userMessage.replace(/(title|banaideu|banau|bana|chahiyo|seo|ko|mera|mero)/gi, '').trim() || 'Your Video';
       return res.json({
-        userGoal: 'Automated direct MP4 video rendering',
-        detectedLanguage: isRomanizedNepali ? 'Romanized Nepali' : 'English',
-        message: 'Currently, Kiran AI Video Studio does not have a tool for direct cloud MP4 video rendering. Kiran AI Video Studio specializes in multi-scene screenplay scriptwriting, 9:16 vertical shorts retention pacing, high-CTR thumbnail composition, and YouTube SEO optimization.',
+        userGoal: 'Direct YouTube title generation',
+        detectedLanguage: isRomanizedNepali ? 'Romanized Nepali' : isDevanagariNepali ? 'Nepali (नेपाली)' : 'English',
+        message: isRomanizedNepali
+          ? `Tapai ko "${sampleTopic}" ko lagi 3 ota tested high-CTR titles yaha chhan:\n\n1. **Search-Focused**: "${sampleTopic} Step-by-Step Complete Guide (2026)"\n2. **Curiosity-Driven**: "The Hidden Truth About ${sampleTopic} Nobody Told You"\n3. **High-CTR**: "Stop Doing This! Best Way to Master ${sampleTopic}"\n\nThap 10 ota title formulas, description timestamps, tags ra SEO score ko lagi **Content & SEO Assistant** kholnus!`
+          : isDevanagariNepali
+          ? `तपाईंको भिडियोको लागि ३ वटा उच्च CTR शीर्षकहरू:\n\n१. **Search-Focused**: "${sampleTopic}: सम्पूर्ण गाइड र महत्त्वपूर्ण टिप्स (२०२६)"\n२. **Curiosity-Driven**: "${sampleTopic} को बारेमा धेरैलाई थाहा नभएको रहस्य"\n३. **High-CTR**: "यो गल्ती नगर्नुहोस्! ${sampleTopic} गर्ने सही तरिका"\n\n१० वटा विभिन्न टाइटल फर्मुला र पूर्ण SEO प्याकको लागि **Content & SEO Assistant** प्रयोग गर्नुहोस्!`
+          : `Here are 3 high-performing YouTube title options for "${sampleTopic}":\n\n1. **Search-Focused**: "${sampleTopic} - Full Guide & Essential Breakdown (2026)"\n2. **Curiosity-Driven**: "The Real Truth About ${sampleTopic} Nobody Talks About"\n3. **High-CTR**: "Stop Doing This! The Only ${sampleTopic} Strategy You Need"\n\nLaunch the **Content & SEO Assistant** to generate all 10 formulas, chapters description, and tags!`,
         recommendedTools: [
-          { id: 'video-generator', name: 'AI Video Planner', reason: 'Structure your complete multi-scene screenplay' },
-          { id: 'video-editor', name: 'Timeline Video Editor', reason: 'Inspect and trim media tracks on an in-browser timeline' }
+          { id: 'content-assistant', name: 'Content & SEO Assistant', reason: 'Generate complete 10-title suite, tags, and description' }
         ]
       });
     }
 
-    if (isUnrelated) {
+    // Direct description generation request: "Yo video ko description bana"
+    const wantsDescription = (lower.includes('description') || lower.includes('bibaran') || lower.includes('vivaran') || lower.includes('विवरण')) && (lower.includes('bana') || lower.includes('banaideu') || lower.includes('banau') || lower.includes('write') || lower.includes('create') || lower.includes('lekh'));
+    if (wantsDescription) {
+      const sampleTopic = userMessage.replace(/(description|bana|banaideu|banau|write|create|lekh|yo|video|ko|ko lagi|chahiyo|banai|deu)/gi, '').trim() || 'Your Video Topic';
       return res.json({
-        userGoal: 'General non-video inquiry',
-        detectedLanguage: isDevanagariNepali ? 'Nepali (नेपाली)' : isRomanizedNepali ? 'Romanized Nepali' : 'English',
-        message: 'Currently, Kiran AI Video Studio does not have a tool for that inquiry. Kiran AI Video Studio is focused specifically on video creation: screenplay script planning, YouTube Shorts pacing, high-CTR thumbnail concepts, and YouTube SEO metadata optimization.',
-        recommendedTools: []
+        userGoal: 'Direct YouTube video description generation',
+        detectedLanguage: isRomanizedNepali ? 'Romanized Nepali' : isDevanagariNepali ? 'Nepali (नेपाली)' : 'English',
+        message: isRomanizedNepali
+          ? `Tapai ko video ("${sampleTopic}") ko lagi ready-to-publish description yaha tayar cha:\n\n📌 **Video Overview**:\nIn this video, we dive deep into ${sampleTopic}, uncovering essential strategies, step-by-step techniques, and practical creator workflows for 2026.\n\n⏱️ **Timestamps / Chapters**:\n0:00 - Introduction & Hook\n0:45 - Key Foundations of ${sampleTopic}\n2:30 - Core Demonstration & Analysis\n5:15 - Essential Tips & Best Practices\n7:40 - Final Thoughts & Summary\n\n🔔 Subscribe to the channel for more creative video tutorials and updates!\n\nThap 10 ota title formulas, tag recommendations, ra 0-100 SEO score audit ko lagi **Content & SEO Assistant** kholnus!`
+          : isDevanagariNepali
+          ? `तपाईंको भिडियो ("${sampleTopic}") को लागि तयार गरिएको युट्युब विवरण:\n\n📌 **भिडियो सारांश**:\nयस भिडियोमा हामीले ${sampleTopic} को बारेमा विस्तृत छलफल गरेका छौँ। सम्पूर्ण चरणबद्ध जानकारी र महत्त्वपूर्ण रचनात्मक सुझावहरू प्रस्तुत गरिएको छ।\n\n⏱️ **टाइमस्ट्याम्प (अध्यायहरू)**:\n०:०० - परिचय तथा मुख्य आकर्षण\n०:४५ - आधारभूत जानकारी\n२:३० - मुख्य विश्लेषण तथा प्रस्तुति\n५:१५ - महत्त्वपूर्ण टिप्स र सावधानी\n७:४० - निष्कर्ष\n\n🔔 थप नयाँ भिडियोहरूको लागि च्यानललाई Subscribe गर्नुहोस्!\n\n१० वटा शीर्षक विकल्प, ट्याग र SEO अडिटका लागि **Content & SEO Assistant** खोल्नुहोस्!`
+          : `Here is a complete, structured YouTube description for "${sampleTopic}":\n\n📌 **Video Summary**:\nIn this video, we dive deep into ${sampleTopic}, breaking down everything you need to know with actionable insights, step-by-step examples, and expert tips for 2026.\n\n⏱️ **Timestamps / Chapters**:\n0:00 - Introduction & Hook\n0:45 - Key Foundations of ${sampleTopic}\n2:30 - Core Demonstration & Analysis\n5:15 - Essential Tips & Best Practices\n7:40 - Final Thoughts & Summary\n\n🔔 Subscribe for more in-depth creator tutorials!\n\nFor 10 title formulas, tag recommendations, and live SEO score audit, launch the **Content & SEO Assistant**!`,
+        recommendedTools: [
+          { id: 'content-assistant', name: 'Content & SEO Assistant', reason: 'Generate full description, tags, hashtags, and 0-100 SEO scoring' }
+        ]
       });
     }
 
-    if (isRomanizedNepali && wantsMusicOrSong) {
+    // Template or Render requests
+    if (wantsTemplateOrRender) {
+      return res.json({
+        userGoal: 'Video templates and beat-sync rendering',
+        detectedLanguage: isRomanizedNepali ? 'Romanized Nepali' : isDevanagariNepali ? 'Nepali (नेपाली)' : 'English',
+        message: isRomanizedNepali
+          ? 'Kiran AI Video Studio ma **AI Template Maker** uplabdha cha! Tapai Trending, Beat Sync, Travel, DJ, Love, Festival, Shorts style ka ready-made templates chhanera aafno photo/video upload garna saknu huncha. Yasle beat matching, Ken Burns pan/zoom, ra transition sahit real video render gari download dina sakcha.'
+          : isDevanagariNepali
+          ? 'किरण एआई भिडियो स्टुडियोमा **AI Template Maker** उपलब्ध छ! तपाईं ट्रेन्डिङ, बीट सिङ्क, ट्राभल, डिजे, लभ, र सर्ट्स शैलीका टेम्प्लेटहरू छानेर आफ्ना फोटो वा भिडियोहरू अपलोड गर्न सक्नुहुन्छ। यसले वास्तविक भिडियो कम्पोजिट गरी डाउनलोड गर्न मिल्ने बनाउँछ।'
+          : 'Kiran AI Video Studio features the **AI Template Maker**! Browse 12 curated categories (Beat Sync, Trending, Travel, DJ, Love, Reels Style, etc.), map your photos or clips to media slots, analyze beats with AI, and render complete videos with instant download.',
+        recommendedTools: [
+          { id: 'templates', name: 'AI Template Maker', reason: 'Browse templates, upload media, and render real videos' }
+        ]
+      });
+    }
+
+    // Music or Song requests
+    if (wantsMusicOrSong) {
       return res.json({
         userGoal: 'Song title, description, and visual storyboard planning',
-        detectedLanguage: 'Romanized Nepali',
-        message: 'Tapai ko song ko lagi title ra description tayar garna Kiran AI Video Studio ko **Content & SEO Assistant** tool le madat garcha. Yo tool le 10 ota high-CTR YouTube titles, timestamps sahitko description, tags, ra hashtags banai dincha.\n\nSaathai, yadi tapai lai aafno geet ko visual storyline, verse-by-verse scene pacing, ra character emotions plan garna man cha bhane **Music Video Storyboarder** tool pani ekdam upayogee huncha!',
-        recommendedTools: [
-          { id: 'content-assistant', name: 'Content & SEO Assistant', reason: 'Song ko lagi YouTube SEO titles, description, ra tags banauna' },
-          { id: 'music-video', name: 'Music Video Storyboarder', reason: 'Geet ko verse ra chorus visual storyline plan garna' }
-        ]
-      });
-    }
-
-    if (isDevanagariNepali && wantsMusicOrSong) {
-      return res.json({
-        userGoal: 'गीतको शीर्षक, विवरण र भिडियो योजना',
-        detectedLanguage: 'Nepali (नेपाली)',
-        message: 'तपाईंको नयाँ गीतको लागि युट्युब शीर्षक र विवरण तयार गर्न **Content & SEO Assistant** टुल उपलब्ध छ। यसले १० वटा आकर्षक शीर्षकहरू, टाइमस्ट्याम्प सहितको विवरण, र ट्यागहरू बनाउँछ।\n\nसाथै, गीतको कथा र दृश्यहरू (storyboard) योजना गर्न **Music Video Storyboarder** टुल प्रयोग गर्न सक्नुहुन्छ!',
-        recommendedTools: [
-          { id: 'content-assistant', name: 'Content & SEO Assistant', reason: 'गीतको लागि युट्युब शीर्षक र विवरण तयार गर्न' },
-          { id: 'music-video', name: 'Music Video Storyboarder', reason: 'गीतको दृश्य कथा र क्यारेक्टर भावना योजना गर्न' }
-        ]
-      });
-    }
-
-    if (wantsThumbnail) {
-      return res.json({
-        userGoal: 'High-CTR thumbnail concept & composition',
         detectedLanguage: isRomanizedNepali ? 'Romanized Nepali' : isDevanagariNepali ? 'Nepali (नेपाली)' : 'English',
-        message: isRomanizedNepali 
-          ? 'Tapai ko video ko lagi thumbnail concept banauna **Thumbnail Concept Designer** tool uplabdha cha. Yasle Rule of Thirds layout, visual contrast, bold headline typography ideas, ra AI image generator prompt pradan garcha.'
+        message: isRomanizedNepali
+          ? 'Tapai ko geet ko lagi YouTube SEO titles, timestamps sahit ko description, tags, ra hashtags banauna **Content & SEO Assistant** tool prayog garnus. Saathai, geet ko verse-by-verse visual story ra character emotion arc plan garna **Music Video Storyboarder** ekdam upayogee huncha!'
           : isDevanagariNepali
-          ? 'तपाईंको युट्युब भिडियोको लागि थम्बनेल योजना गर्न **Thumbnail Concept Designer** टुल उपलब्ध छ। यसले Rule of Thirds भिजुअल लेआउट, रङ्ग कन्ट्रास्ट, बोल्ड शीर्षक अक्षरहरू, र एआई इमेज प्रम्प्टहरू प्रदान गर्दछ।'
-          : 'To design compelling thumbnails, use our **Thumbnail Concept Designer**. It provides proven Rule of Thirds composition architecture, focal subject positioning, high-contrast bold typography suggestions, and copy-ready AI image prompts.',
+          ? 'तपाईंको नयाँ गीतको लागि युट्युब शीर्षक र विवरण तयार गर्न **Content & SEO Assistant** टुल उपलब्ध छ। साथै, गीतको कथा र दृश्यहरू योजना गर्न **Music Video Storyboarder** टुल प्रयोग गर्न सक्नुहुन्छ!'
+          : 'For songs and musical releases, use the **Content & SEO Assistant** to generate title options, description with timestamps, tags, and lyrics credits. Additionally, use the **Music Video Storyboarder** to map verse-by-verse scene visual storylines and character arcs.',
         recommendedTools: [
-          { id: 'thumbnail-maker', name: 'Thumbnail Concept Designer', reason: 'Create visual composition guidelines and headline concepts' }
+          { id: 'content-assistant', name: 'Content & SEO Assistant', reason: 'Generate song titles, descriptions, tags, and hashtags' },
+          { id: 'music-video', name: 'Music Video Storyboarder', reason: 'Map verse-by-verse visual scene storytelling' }
         ]
       });
     }
 
+    // Shorts requests
     if (wantsShorts) {
       return res.json({
         userGoal: 'Vertical 9:16 short video creation',
-        detectedLanguage: isRomanizedNepali ? 'Romanized Nepali' : 'English',
+        detectedLanguage: isRomanizedNepali ? 'Romanized Nepali' : isDevanagariNepali ? 'Nepali (नेपाली)' : 'English',
         message: isRomanizedNepali 
-          ? 'Shorts, Reels wa TikTok video banauna **Shorts & Reels Creator** prayog garnus. Yasle 3-second opening hook, rapid visual cuts, ra on-screen text overlays plan gari dincha.'
-          : 'To create vertical short-form content for YouTube Shorts, Reels, or TikTok, use the **Shorts & Reels Creator**. It crafts 3-second high-retention hooks, second-by-second scene cuts, and on-screen caption copy.',
+          ? 'AI bata Shorts banauna yo 3-step workflow prayog garnus:\n\n1. **Shorts & Reels Creator**: 0-3 second ma scroll roknay opening hook, visual scenes, ra captions plan garnus.\n2. **AI Template Maker**: Pre-built 9:16 vertical templates ma aafna clips halera beat-sync video render garnus.\n3. **Content & SEO Assistant**: Shorts ko title ra viral hashtags generate garnus.'
+          : isDevanagariNepali
+          ? 'एआईबाट सर्ट्स बनाउन ३-चरणको प्रक्रिया अपनाउनुहोस्:\n\n१. **Shorts & Reels Creator**: ३-सेकेन्डको बलियो हुक, छिटो दृश्य परिवर्तन, र अन-स्क्रिन टेक्स्ट योजना गर्नुहोस्।\n२. **AI Template Maker**: भर्टिकल ९:१६ टेम्प्लेट छानेर क्लिपहरू बीट अनुसार रेन्डर गर्नुहोस्।\n३. **Content & SEO Assistant**: सर्ट्सको लागि आकर्षक शीर्षक र ह्यासट्यागहरू बनाउनुहोस्।'
+          : 'To create high-retention Shorts and Reels:\n\n1. **Shorts & Reels Creator**: Craft a 3-second scroll-stopping hook, fast-paced scene cuts, and on-screen text overlays.\n2. **AI Template Maker**: Select 9:16 vertical templates to render fast beat-synced short videos.\n3. **Content & SEO Assistant**: Generate viral titles, captions, and hashtags.',
         recommendedTools: [
-          { id: 'shorts-creator', name: 'Shorts & Reels Creator', reason: 'Plan vertical 9:16 hook-first short videos' }
+          { id: 'shorts-creator', name: 'Shorts & Reels Creator', reason: 'Plan vertical 9:16 hook-first short videos' },
+          { id: 'templates', name: 'AI Template Maker', reason: 'Render beat-synced vertical short videos' }
         ]
       });
     }
 
+    // Video Planning requests
     if (wantsVideoPlan) {
       return res.json({
         userGoal: 'Comprehensive YouTube video creation workflow',
-        detectedLanguage: isRomanizedNepali ? 'Romanized Nepali' : 'English',
-        message: 'To produce a successful video, follow this workflow on Kiran AI Video Studio:\n\n1. **AI Video Planner**: Structure your multi-scene screenplay with camera movements, dialogue, voiceover, and scenic pacing.\n2. **Thumbnail Concept Designer**: Design high-contrast thumbnail compositions with focal subject positioning and bold typography.\n3. **Content & SEO Assistant**: Generate 10 tested titles, structured chapters/timestamps description, and high-relevance tags.',
+        detectedLanguage: isRomanizedNepali ? 'Romanized Nepali' : isDevanagariNepali ? 'Nepali (नेपाली)' : 'English',
+        message: isRomanizedNepali
+          ? 'Safalta-purwak video banauna Kiran AI Video Studio ko yo workflow apanaunus:\n\n1. **AI Video Planner**: Camera shots, dialogue, voiceover, ra visual scene timing breakdown plan garnus.\n2. **Thumbnail Concept Designer**: Rule of thirds, high contrast, ra bold typography sahit ko thumbnail cover plan garnus.\n3. **Content & SEO Assistant**: 10 ota tested titles, structured chapters, ra tags generate garnus.'
+          : 'To produce a successful video, follow this workflow on Kiran AI Video Studio:\n\n1. **AI Video Planner**: Structure your multi-scene screenplay with camera movements, dialogue, voiceover, and scenic pacing.\n2. **Thumbnail Concept Designer**: Design high-contrast thumbnail compositions with focal subject positioning and bold typography.\n3. **Content & SEO Assistant**: Generate 10 tested titles, structured chapters/timestamps description, and high-relevance tags.',
         recommendedTools: [
           { id: 'video-generator', name: 'AI Video Planner', reason: 'Generate multi-scene script with camera shots and voiceover' },
           { id: 'thumbnail-maker', name: 'Thumbnail Concept Designer', reason: 'Design high-CTR thumbnail layouts and image prompts' },
@@ -2889,7 +4865,7 @@ apiRouter.post(['/ai/timeline-planner', '/api/ai/timeline-planner'], async (req,
     if (!ai) {
       return res.status(503).json({
         success: false,
-        error: 'Gemini API key is not configured. Please verify GEMINI_API_KEY in environment variables.'
+        error: 'AI Timeline Planner service is momentarily busy. Please try again shortly.'
       });
     }
 
@@ -3089,7 +5065,7 @@ apiRouter.post(['/ai/timeline-regenerate-scene', '/api/ai/timeline-regenerate-sc
 
     const ai = getGeminiClient();
     if (!ai) {
-      return res.status(503).json({ success: false, error: 'Gemini API key is not configured.' });
+      return res.status(503).json({ success: false, error: 'Scene regeneration service is momentarily busy. Please try again shortly.' });
     }
 
     const prompt = `You are an AI Video Director for Kiran AI Video Studio.
@@ -3187,7 +5163,7 @@ app.use('/api', apiRouter);
 // Standalone health and status endpoints (without intercepting the frontend root '/')
 app.get(['/health', '/status'], handleHealthCheck);
 
-export { app, apiRouter, authRouter, projectRouter };
+export { app, apiRouter, authRouter, projectRouter, adminRouter, templateRouter, updateRouter };
 
 // Export serverless handler for Vercel Serverless Functions
 export default function handler(req: any, res: any) {

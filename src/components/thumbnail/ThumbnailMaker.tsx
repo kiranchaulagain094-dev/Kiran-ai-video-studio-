@@ -181,10 +181,10 @@ export const ThumbnailMaker: React.FC<ThumbnailMakerProps> = ({ initialIdea, ini
         setUploadedImageBase64(res.imageBase64);
       }
     } catch (err: any) {
-      // Honest message per Requirement 6 & 9
+      // User-friendly message
       setErrorMessage(
         err?.message || 
-        'Direct AI Image Generation requires an image-generation enabled Gemini API key tier. You can use the copy-ready High-CTR prompt generated above directly in Imagen 3, Midjourney, or Flux, or upload your custom background photo onto the interactive canvas.'
+        'Direct AI Image Generation is currently in high demand. You can use the copy-ready High-CTR prompt generated above directly in Imagen, Midjourney, or Flux, or upload your custom background photo onto the interactive canvas.'
       );
     } finally {
       setIsGeneratingDirectImage(false);

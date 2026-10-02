@@ -34,17 +34,17 @@ export const AIToolsGuide: React.FC<AIToolsGuideProps> = ({ onNavigate }) => {
       <section className="space-y-4">
         <h2 className="text-xl sm:text-2xl font-bold text-white flex items-center gap-2 border-b border-white/10 pb-2">
           <Cpu className="w-5 h-5 text-indigo-400" />
-          1. AI Architecture & Backend Pipeline
+          1. AI Processing & Studio Technology
         </h2>
         <p>
-          Kiran AI Video Studio combines large language models with specialized video pre-production heuristics. When you request a storyboard or SEO metadata pack, the studio processes your creative inputs through a secure backend proxy communicating with Google Gemini generative models.
+          Kiran AI Video Studio combines intelligent language models with specialized video pre-production heuristics. When you request a storyboard or SEO metadata pack, the studio processes your creative inputs securely to generate high-performing production assets.
         </p>
         <div className="p-4 rounded-2xl bg-[#121622] border border-white/10 space-y-2 text-xs text-slate-300">
-          <p className="font-bold text-white text-sm">Key Architectural Safeguards:</p>
+          <p className="font-bold text-white text-sm">Key Studio Safeguards:</p>
           <ul className="list-disc list-inside space-y-1.5 text-slate-400">
-            <li><strong>Zero Public Key Leakage:</strong> All AI requests are proxied server-side so API keys and infrastructure credentials are never exposed in browser network inspection.</li>
-            <li><strong>Resilient Programmatic Fallback:</strong> If third-party API rate limits occur during heavy peak demand, the studio automatically switches to deterministic programmatic algorithms, ensuring you never face an empty screen or interrupted creative session.</li>
-            <li><strong>Client-Side State:</strong> No prompts or generated scripts are saved into external tracking databases without your explicit instruction. All generated content lives directly inside your browser storage.</li>
+            <li><strong>Encrypted Communications:</strong> All studio requests are processed through secure channels with zero exposure of sensitive data.</li>
+            <li><strong>Resilient Studio Pipeline:</strong> Intelligent backup algorithms ensure you always receive structured, production-ready plans without creative interruption.</li>
+            <li><strong>Secure Project Workspace:</strong> Your prompts, generated scripts, and video timelines are private to you and saved safely in your workspace.</li>
           </ul>
         </div>
       </section>

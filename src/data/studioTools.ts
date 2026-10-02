@@ -91,25 +91,25 @@ export const CURRENT_STUDIO_TOOLS: StudioTool[] = [
   },
   {
     id: 'templates',
-    name: 'Templates Library',
-    badge: 'Presets',
+    name: 'AI Template Maker',
+    badge: 'Templates',
     route: 'templates',
-    shortDescription: 'Curated collection of pre-made video templates (Travel Vlogs, Tech Reviews, Documentary, Folk Music Video, Storytelling Shorts) ready to load directly into the planner.',
-    detailedPurpose: 'Gives creators quick starting points with proven structures so they don’t have to start from a blank prompt.',
-    howToUse: 'Browse categories, choose a template, and click Use Template to immediately populate the AI Video Planner.',
-    expectedResult: 'Instantly pre-filled video generator with optimized prompts, duration settings, and visual styles.',
-    keywords: ['template', 'templates', 'sample', 'preset', 'ready made', 'starter', 'framework']
+    shortDescription: 'Curated video templates library & AI Template Maker. Upload media into pre-timed slots with beat-sync rendering, preview, and download.',
+    detailedPurpose: 'Enables creators to select high-performing templates across 12 categories (Beat Sync, Trending, Travel, DJ, Love, etc.), map their photos/videos, analyze tempo with AI, and render complete videos.',
+    howToUse: 'Browse categories, select a template, upload photos or clips into the media slots, analyze beats, and click Create Video to render and download.',
+    expectedResult: 'A rendered, high-quality video ready to preview, download, and save to your creator workspace.',
+    keywords: ['template', 'templates', 'template maker', 'beat sync', 'photo transition', 'render video', 'shorts template', 'reels template', 'tiktok template', 'dj template']
   },
   {
     id: 'projects',
     name: 'My Projects',
     badge: 'Workspace',
     route: 'projects',
-    shortDescription: 'Local workspace project manager. View saved video plans, re-open them in the video editor, export as JSON, or organize drafts in browser storage.',
-    detailedPurpose: 'Stores and organizes all user-created scripts, scene plans, and video projects directly in the user’s browser with zero required login.',
+    shortDescription: 'Creator workspace project manager. View saved video plans, re-open them in the video editor, export as JSON, and synchronize securely across devices.',
+    detailedPurpose: 'Stores and organizes all user-created scripts, scene plans, and video projects directly in your secure creator workspace.',
     howToUse: 'Access My Projects from the sidebar or header to review past plans, duplicate, or open directly in the editor.',
     expectedResult: 'List of saved projects with status badges, scene counts, duration, and one-click edit/export options.',
-    keywords: ['project', 'projects', 'saved', 'draft', 'drafts', 'history', 'export', 'my work', 'storage']
+    keywords: ['project', 'projects', 'saved', 'draft', 'drafts', 'history', 'export', 'my work', 'workspace', 'sync']
   },
   {
     id: 'about-us',
