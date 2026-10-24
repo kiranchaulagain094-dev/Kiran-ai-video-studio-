@@ -5,6 +5,7 @@ interface AuthContextType {
   user: AuthUser | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  isLoggingIn: boolean;
   authError: string | null;
   config: AuthConfig | null;
   isLoginModalOpen: boolean;
@@ -21,6 +22,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
@@ -49,11 +51,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     if (authErrorParam) {
       setAuthError(authErrorParam);
+      setIsLoggingIn(false);
       setIsLoginModalOpen(true);
       // Clean query parameter from URL without reload
       const newUrl = window.location.pathname;
       window.history.replaceState({}, document.title, newUrl);
     } else if (authSuccessParam) {
+      setIsLoggingIn(false);
       // Clean query parameter from URL
       const newUrl = window.location.pathname;
       window.history.replaceState({}, document.title, newUrl);
@@ -63,6 +67,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, []);
 
   const loginWithGoogle = () => {
+    setIsLoggingIn(true);
+    setAuthError(null);
     AuthClient.loginWithGoogle();
   };
 
@@ -87,14 +93,24 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  const openLoginModal = () => setIsLoginModalOpen(true);
-  const closeLoginModal = () => setIsLoginModalOpen(false);
-  const clearAuthError = () => setAuthError(null);
+  const openLoginModal = () => {
+    setIsLoggingIn(false);
+    setIsLoginModalOpen(true);
+  };
+  const closeLoginModal = () => {
+    setIsLoggingIn(false);
+    setIsLoginModalOpen(false);
+  };
+  const clearAuthError = () => {
+    setAuthError(null);
+    setIsLoggingIn(false);
+  };
 
   const value: AuthContextType = {
     user,
     isAuthenticated: Boolean(user),
     isLoading,
+    isLoggingIn,
     authError,
     config,
     isLoginModalOpen,

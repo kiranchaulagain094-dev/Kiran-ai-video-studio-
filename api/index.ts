@@ -1013,6 +1013,15 @@ export function getSafeProto(req: any): string {
 }
 
 export function getBaseUrl(req: any): string {
+  const host = getSafeHost(req);
+  const proto = getSafeProto(req);
+
+  // 1. If incoming request has a real production host (e.g. kiran-ai-video-studio.vercel.app), prioritize it
+  if (host && !host.includes('localhost') && !host.includes('127.0.0.1')) {
+    return `${proto}://${host}`;
+  }
+
+  // 2. Explicit APP_URL override
   if (process.env.APP_URL && process.env.APP_URL.trim().length > 0) {
     let appUrl = process.env.APP_URL.trim().replace(/\/+$/, '');
     if (!appUrl.startsWith('http://') && !appUrl.startsWith('https://')) {
@@ -1021,19 +1030,14 @@ export function getBaseUrl(req: any): string {
     return appUrl;
   }
 
-  const host = getSafeHost(req);
-  const proto = getSafeProto(req);
-
-  if (host && !host.includes('localhost') && !host.includes('127.0.0.1')) {
-    return `${proto}://${host}`;
-  }
-
+  // 3. Vercel deployment variables
   const vercelEnvUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
   if (vercelEnvUrl && vercelEnvUrl.trim().length > 0) {
     const clean = vercelEnvUrl.trim().replace(/\/+$/, '');
     return clean.startsWith('http') ? clean : `https://${clean}`;
   }
 
+  // 4. Fallback to local host header or port 3000
   if (host) {
     return `${proto}://${host}`;
   }
@@ -1068,13 +1072,22 @@ export function getGoogleRedirectUri(req: any): string {
 export function isGoogleOAuthConfigured(): boolean {
   const id = getCleanGoogleClientId();
   const secret = getCleanGoogleClientSecret();
-  return id.length > 0 && secret.length > 0;
+  return id.length > 0 && secret.length > 0 && id.includes('.apps.googleusercontent.com');
 }
 
 export function getGoogleAuthorizationUrl(req: any, state?: string): string {
   const clientId = getCleanGoogleClientId();
   if (!clientId) {
     throw new Error('GOOGLE_CLIENT_ID is not configured in server environment variables.');
+  }
+
+  if (!clientId.includes('.apps.googleusercontent.com')) {
+    if (/^\d+$/.test(clientId)) {
+      throw new Error(
+        `GOOGLE_CLIENT_ID appears to be a Google Cloud Project Number ('${clientId}') rather than an OAuth Web Client ID. ` +
+        `Please copy the 'Client ID' of your Web application from Google Cloud Console > APIs & Services > Credentials (format: [id].apps.googleusercontent.com).`
+      );
+    }
   }
 
   const redirectUri = getGoogleRedirectUri(req);
@@ -1615,16 +1628,29 @@ authRouter.get(['/google', '/auth/google', '/api/auth/google'], (req: Request, r
 
     if (!clientId || clientId.length === 0) {
       missing.push('GOOGLE_CLIENT_ID');
+    } else if (!clientId.includes('.apps.googleusercontent.com')) {
+      if (/^\d+$/.test(clientId)) {
+        missing.push(`GOOGLE_CLIENT_ID (currently set to Project Number '${clientId}', but must be the full Web Client ID ending in '.apps.googleusercontent.com')`);
+      } else {
+        missing.push(`GOOGLE_CLIENT_ID (must be a valid Web Application Client ID ending in '.apps.googleusercontent.com')`);
+      }
     }
+
     if (!clientSecret || clientSecret.length === 0) {
       missing.push('GOOGLE_CLIENT_SECRET');
     }
+
     if (!isDbConfigured()) {
-      missing.push('DATABASE_URL');
+      const rawDbUrl = (process.env.DATABASE_URL || '').trim();
+      if (rawDbUrl.startsWith('//') || rawDbUrl.includes('prisma')) {
+        missing.push('DATABASE_URL (currently contains Prisma config text instead of a valid postgresql:// connection string)');
+      } else {
+        missing.push('DATABASE_URL (must be a valid postgresql://... connection string from Neon)');
+      }
     }
 
     if (missing.length > 0) {
-      const errorMsg = `Google OAuth is not configured. Missing required environment variable(s): ${missing.join(', ')}. Please configure them in your Vercel project settings.`;
+      const errorMsg = `Google OAuth is not configured. Missing or invalid required environment variable(s): ${missing.join(', ')}. Please configure them in your Vercel project settings.`;
       console.warn('[Google OAuth Config Error]:', errorMsg);
       
       const wantsJson = req.headers.accept?.includes('application/json') || req.xhr;
