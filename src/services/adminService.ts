@@ -424,4 +424,30 @@ export class AdminService {
     const data = await res.json();
     return data.url;
   }
+
+  /**
+   * Dispatches a controlled test notification email to Kiranchaulagain094@gmail.com
+   */
+  static async sendTestEmail(): Promise<{
+    success: boolean;
+    recipient: string;
+    message?: string;
+    error?: string;
+    id?: string;
+    timestamp?: string;
+  }> {
+    const res = await fetch('/api/admin/test-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include'
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || `Failed to dispatch test email (HTTP ${res.status})`);
+    }
+
+    return data;
+  }
 }
+

@@ -33,7 +33,8 @@ import {
   Globe,
   Rocket,
   Send,
-  Filter
+  Filter,
+  Mail
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { AdminService, AdminStats, AdminUser, AdminActivity } from '../../services/adminService';
@@ -100,6 +101,31 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onNavigateHome, onOpenTe
     publishedReleasesCount: 0,
     draftReleasesCount: 0
   });
+
+  // Email Notifications Management (Requirement 9 & 10)
+  const [isSendingTestEmail, setIsSendingTestEmail] = useState<boolean>(false);
+  const [testEmailResult, setTestEmailResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null);
+
+  const handleSendTestEmail = async () => {
+    setIsSendingTestEmail(true);
+    setTestEmailResult(null);
+    try {
+      const res = await AdminService.sendTestEmail();
+      setTestEmailResult({
+        success: true,
+        message: res.message || `Test email dispatched to ${res.recipient}!`
+      });
+      showFeedback(`Test notification sent to ${res.recipient}`);
+    } catch (err: any) {
+      setTestEmailResult({
+        success: false,
+        error: err?.message || 'Failed to send test email.'
+      });
+      showError(err?.message || 'Failed to send test email.');
+    } finally {
+      setIsSendingTestEmail(false);
+    }
+  };
 
   // Global Action Feedback Toast
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
@@ -2037,6 +2063,77 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onNavigateHome, onOpenTe
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-white font-medium">Database Persistence:</span>
                   <span className="text-cyan-300 font-mono">Metadata Only</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Email Notifications Pipeline Panel */}
+            <div className="p-5 rounded-2xl bg-[#171c2b] border border-indigo-500/30 space-y-3.5 mt-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center">
+                    <Mail className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                      Resend Automatic Email Notification Pipeline
+                    </h4>
+                    <p className="text-[11px] text-slate-400">
+                      Administrative notifications routed to <span className="text-indigo-300 font-mono font-semibold">Kiranchaulagain094@gmail.com</span>
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleSendTestEmail}
+                  disabled={isSendingTestEmail}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-cyan-600 hover:from-indigo-500 hover:to-cyan-500 disabled:opacity-50 text-white font-bold text-xs shadow-md transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
+                >
+                  {isSendingTestEmail ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Send className="w-3.5 h-3.5" />
+                  )}
+                  <span>{isSendingTestEmail ? 'Sending Test...' : 'Send Test Email'}</span>
+                </button>
+              </div>
+
+              {testEmailResult && (
+                <div
+                  className={`p-3 rounded-xl border text-xs flex items-start gap-2 ${
+                    testEmailResult.success
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                      : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                  }`}
+                >
+                  {testEmailResult.success ? (
+                    <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+                  )}
+                  <div>
+                    <span className="font-semibold block">
+                      {testEmailResult.success ? 'Test Email Dispatched Successfully' : 'Email Dispatch Note'}
+                    </span>
+                    <span className="text-[11px] opacity-90 block mt-0.5">
+                      {testEmailResult.message || testEmailResult.error}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1 text-[11px]">
+                <div className="p-2.5 rounded-xl bg-black/20 border border-white/5 space-y-1">
+                  <span className="text-slate-500 font-semibold uppercase tracking-wider text-[9px] block">Connected Events</span>
+                  <p className="text-slate-300 font-medium">New User Signups, Video Requests, Completions &amp; Failures</p>
+                </div>
+                <div className="p-2.5 rounded-xl bg-black/20 border border-white/5 space-y-1">
+                  <span className="text-slate-500 font-semibold uppercase tracking-wider text-[9px] block">Timezone Format</span>
+                  <p className="text-cyan-300 font-mono">Asia/Kathmandu (GMT+5:45)</p>
+                </div>
+                <div className="p-2.5 rounded-xl bg-black/20 border border-white/5 space-y-1">
+                  <span className="text-slate-500 font-semibold uppercase tracking-wider text-[9px] block">Deduplication</span>
+                  <p className="text-emerald-400 font-medium">Idempotent (admin_notifications table + TTL)</p>
                 </div>
               </div>
             </div>
