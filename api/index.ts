@@ -18,7 +18,7 @@ import {
   getAdminNotificationEmail,
   getKathmanduTimestamp,
   sanitizeError
-} from '../server/emailNotificationService';
+} from './emailNotificationService';
 
 export const CURRENT_APP_VERSION = "1.1.0";
 export const APP_CHANGELOGS: Record<string, any> = {
@@ -3325,12 +3325,12 @@ const apiRouter = express.Router();
 // Attach authenticated session user to requests
 app.use(attachUserMiddleware);
 
-// Direct mount on app for /api/auth, /api/projects, /api/admin, /api/templates, and /api/updates
-app.use('/api/auth', authRouter);
-app.use('/api/projects', projectRouter);
-app.use('/api/admin', adminRouter);
-app.use('/api/templates', templateRouter);
-app.use('/api/updates', updateRouter);
+// Direct mount on app supporting both /api/... and stripped /... paths
+app.use(['/api/auth', '/auth'], authRouter);
+app.use(['/api/projects', '/projects'], projectRouter);
+app.use(['/api/admin', '/admin'], adminRouter);
+app.use(['/api/templates', '/templates'], templateRouter);
+app.use(['/api/updates', '/updates'], updateRouter);
 
 // Also mount on apiRouter
 apiRouter.use('/auth', authRouter);
@@ -5391,32 +5391,18 @@ apiRouter.use((err: any, req: express.Request, res: express.Response, next: expr
   });
 });
 
-// Mount the API Router specifically at '/api'
+// Mount the API Router at '/api'
 app.use('/api', apiRouter);
 
-// Standalone health and status endpoints (without intercepting the frontend root '/')
-app.get(['/health', '/status'], handleHealthCheck);
+// Standalone health and status endpoints across all route variants
+app.get(['/health', '/status', '/api/health', '/api/status'], handleHealthCheck);
 
 export { app, apiRouter, authRouter, projectRouter, adminRouter, templateRouter, updateRouter };
 
 // Export serverless handler for Vercel Serverless Functions
-export default function handler(req: any, res: any) {
-  try {
-    return app(req, res);
-  } catch (err: any) {
-    console.error('Fatal Serverless Handler Exception:', err);
-    if (!res.headersSent) {
-      res.statusCode = 500;
-      if (typeof res.setHeader === 'function') {
-        res.setHeader('Content-Type', 'application/json');
-      }
-      res.end(JSON.stringify({
-        success: false,
-        error: err?.message || 'Server error processing request',
-        fatal: true
-      }));
-    }
-  }
-}
+// Vercel's Node runtime natively detects and manages Express instances via default export
+export const handler = app;
+export default app;
+
 
 
