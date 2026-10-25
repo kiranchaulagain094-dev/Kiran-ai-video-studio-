@@ -1,6 +1,18 @@
 /**
  * Kiran AI Video Studio - Real Automatic Email Notification Service
- * Re-exports the unified notification service from /api/emailNotificationService
- * Ensures compatibility across standalone Express server and Vercel Serverless Functions.
+ * Re-exports the unified notification service from /api/index
+ * Ensures full backwards compatibility across the application.
  */
-export * from '../api/emailNotificationService';
+export {
+  notifyAdminNewUserSignup,
+  notifyAdminVideoRequested,
+  notifyAdminVideoCompleted,
+  notifyAdminVideoFailed,
+  notifyAdminOperationalError,
+  sendAdminTestEmail,
+  sendAdminNotification,
+  isEmailConfigured,
+  getAdminNotificationEmail,
+  getKathmanduTimestamp,
+  sanitizeError
+} from '../api/index';
