@@ -1,12 +1,16 @@
 import { app } from './api/index';
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 
-const PORT = 3000;
+// Dynamic port binding required for Render, Railway, Cloud Run, and local dev
+const PORT = Number(process.env.PORT) || 3000;
 
 // Vite Middleware Setup for Dev & Production
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.RENDER);
+
+  if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -15,18 +19,34 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    if (fs.existsSync(distPath)) {
+      app.use(express.static(distPath));
+    }
+    app.get('*', (req, res, next) => {
+      // Never intercept API, health, or auth routes
+      if (
+        req.path.startsWith('/api') ||
+        req.path.startsWith('/health') ||
+        req.path.startsWith('/status') ||
+        req.path.startsWith('/auth')
+      ) {
+        return next();
+      }
+      const indexPath = path.join(distPath, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(200).send('Kiran AI Video Studio is initializing. Please refresh in a moment.');
+      }
     });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Kiran AI Video Studio server running on http://0.0.0.0:${PORT}`);
+    console.log(`Kiran AI Video Studio running on http://0.0.0.0:${PORT}`);
   });
 }
 
-// Auto-start server in standalone Node or Cloud Run container
+// Auto-start server in standalone Node (Render, Railway, Docker, Local)
 const isServerless = Boolean(
   process.env.VERCEL ||
   process.env.VERCEL_ENV ||
