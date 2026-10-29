@@ -1,6 +1,6 @@
 {
   "name": "Kiran AI Video Studio",
-  "description": "Browser studio for video screenplay planning, vertical Shorts, multi-track editing, and YouTube SEO optimization by Kiran Chaulagain.",
+  "description": "Create cinematic AI video scripts, plan 9:16 viral YouTube Shorts, edit multi-scene timelines, and generate high-CTR metadata and SEO tags with Kiran AI Video Studio.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { AuthClient, AuthUser, AuthConfig } from '../lib/authClient';
 
+export type AuthModalView = 'signin' | 'signup' | 'otp' | 'forgot-password' | 'reset-password';
+
 interface AuthContextType {
   user: AuthUser | null;
   isAuthenticated: boolean;
@@ -9,10 +11,24 @@ interface AuthContextType {
   authError: string | null;
   config: AuthConfig | null;
   isLoginModalOpen: boolean;
-  openLoginModal: () => void;
+  modalView: AuthModalView;
+  pendingEmail: string;
+  pendingPurpose: 'signup_verification' | 'password_reset';
+  intendedRoute: string | null;
+  setIntendedRoute: (route: string | null) => void;
+  openLoginModal: (view?: AuthModalView, email?: string) => void;
   closeLoginModal: () => void;
   clearAuthError: () => void;
+  setModalView: (view: AuthModalView) => void;
+  setPendingEmail: (email: string) => void;
+  setPendingPurpose: (purpose: 'signup_verification' | 'password_reset') => void;
   loginWithGoogle: () => void;
+  loginWithEmail: (email: string, password: string, recaptchaToken?: string) => Promise<{ success: boolean; error?: string; requiresVerification?: boolean }>;
+  signupWithEmail: (email: string, password: string, displayName?: string, recaptchaToken?: string) => Promise<{ success: boolean; error?: string }>;
+  verifyOtp: (code: string, recaptchaToken?: string) => Promise<{ success: boolean; error?: string }>;
+  resendOtp: (recaptchaToken?: string) => Promise<{ success: boolean; error?: string }>;
+  forgotPassword: (email: string, recaptchaToken?: string) => Promise<{ success: boolean; error?: string }>;
+  resetPassword: (code: string, newPassword: string, recaptchaToken?: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -26,6 +42,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [authError, setAuthError] = useState<string | null>(null);
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
+  const [modalView, setModalView] = useState<AuthModalView>('signin');
+  const [pendingEmail, setPendingEmail] = useState<string>('');
+  const [pendingPurpose, setPendingPurpose] = useState<'signup_verification' | 'password_reset'>('signup_verification');
+  const [intendedRoute, setIntendedRoute] = useState<string | null>(null);
 
   const fetchUserAndConfig = async () => {
     setIsLoading(true);
@@ -52,6 +72,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (authErrorParam) {
       setAuthError(authErrorParam);
       setIsLoggingIn(false);
+      setModalView('signin');
       setIsLoginModalOpen(true);
       // Clean query parameter from URL without reload
       const newUrl = window.location.pathname;
@@ -70,6 +91,139 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setIsLoggingIn(true);
     setAuthError(null);
     AuthClient.loginWithGoogle();
+  };
+
+  const loginWithEmail = async (email: string, password: string, recaptchaToken?: string) => {
+    setIsLoggingIn(true);
+    setAuthError(null);
+    try {
+      const res = await AuthClient.loginWithEmail({ email, password, recaptchaToken });
+      if (!res.success) {
+        if (res.requiresVerification) {
+          setPendingEmail(res.email || email);
+          setPendingPurpose('signup_verification');
+          setModalView('otp');
+          setAuthError(res.error || 'Please enter the 6-digit code sent to your email.');
+          return { success: false, error: res.error, requiresVerification: true };
+        }
+        setAuthError(res.error || 'Invalid email or password.');
+        return { success: false, error: res.error };
+      }
+      if (res.user) {
+        setUser(res.user);
+        setIsLoginModalOpen(false);
+      }
+      return { success: true };
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const signupWithEmail = async (email: string, password: string, displayName?: string, recaptchaToken?: string) => {
+    setIsLoggingIn(true);
+    setAuthError(null);
+    try {
+      const res = await AuthClient.signup({ email, password, display_username: displayName, recaptchaToken });
+      if (!res.success) {
+        setAuthError(res.error || 'Failed to create account.');
+        return { success: false, error: res.error };
+      }
+      setPendingEmail(res.email || email);
+      setPendingPurpose('signup_verification');
+      setModalView('otp');
+      return { success: true };
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const verifyOtp = async (code: string, recaptchaToken?: string) => {
+    setIsLoggingIn(true);
+    setAuthError(null);
+    try {
+      const res = await AuthClient.verifyOtp({
+        email: pendingEmail,
+        code,
+        purpose: pendingPurpose,
+        recaptchaToken
+      });
+      if (!res.success) {
+        setAuthError(res.error || 'Verification failed.');
+        return { success: false, error: res.error };
+      }
+      if (pendingPurpose === 'signup_verification' && res.user) {
+        setUser(res.user);
+        setIsLoginModalOpen(false);
+      } else if (pendingPurpose === 'password_reset') {
+        setModalView('reset-password');
+      }
+      return { success: true };
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const resendOtp = async (recaptchaToken?: string) => {
+    setAuthError(null);
+    try {
+      const res = await AuthClient.resendOtp({
+        email: pendingEmail,
+        purpose: pendingPurpose,
+        recaptchaToken
+      });
+      if (!res.success) {
+        setAuthError(res.error || 'Failed to resend code.');
+        return { success: false, error: res.error };
+      }
+      return { success: true };
+    } catch (e: any) {
+      setAuthError(e?.message || 'Failed to resend code.');
+      return { success: false, error: e?.message };
+    }
+  };
+
+  const forgotPassword = async (email: string, recaptchaToken?: string) => {
+    setIsLoggingIn(true);
+    setAuthError(null);
+    try {
+      const res = await AuthClient.forgotPassword({ email, recaptchaToken });
+      if (!res.success) {
+        setAuthError(res.error || 'Failed to process request.');
+        return { success: false, error: res.error };
+      }
+      setPendingEmail(res.email || email);
+      setPendingPurpose('password_reset');
+      setModalView('reset-password');
+      return { success: true };
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const resetPassword = async (code: string, newPassword: string, recaptchaToken?: string) => {
+    setIsLoggingIn(true);
+    setAuthError(null);
+    try {
+      const res = await AuthClient.resetPassword({
+        email: pendingEmail,
+        code,
+        newPassword,
+        recaptchaToken
+      });
+      if (!res.success) {
+        setAuthError(res.error || 'Failed to reset password.');
+        return { success: false, error: res.error };
+      }
+      if (res.user) {
+        setUser(res.user);
+        setIsLoginModalOpen(false);
+      } else {
+        setModalView('signin');
+      }
+      return { success: true };
+    } finally {
+      setIsLoggingIn(false);
+    }
   };
 
   const logout = async () => {
@@ -93,14 +247,18 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
-  const openLoginModal = () => {
+  const openLoginModal = (view: AuthModalView = 'signin', email: string = '') => {
     setIsLoggingIn(false);
+    setModalView(view);
+    if (email) setPendingEmail(email);
     setIsLoginModalOpen(true);
   };
+
   const closeLoginModal = () => {
     setIsLoggingIn(false);
     setIsLoginModalOpen(false);
   };
+
   const clearAuthError = () => {
     setAuthError(null);
     setIsLoggingIn(false);
@@ -114,10 +272,24 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     authError,
     config,
     isLoginModalOpen,
+    modalView,
+    pendingEmail,
+    pendingPurpose,
+    intendedRoute,
+    setIntendedRoute,
     openLoginModal,
     closeLoginModal,
     clearAuthError,
+    setModalView,
+    setPendingEmail,
+    setPendingPurpose,
     loginWithGoogle,
+    loginWithEmail,
+    signupWithEmail,
+    verifyOtp,
+    resendOtp,
+    forgotPassword,
+    resetPassword,
     logout,
     refreshUser
   };

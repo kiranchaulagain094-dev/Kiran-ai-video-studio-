@@ -1,0 +1,21 @@
+# Kiran AI Video Studio - Robots Configuration
+# Canonical: https://kiran-ai-video-studio.vercel.app/
+
+User-agent: *
+Allow: /
+Allow: /articles
+Allow: /articles/*
+Allow: /about-us
+Allow: /how-to-use
+Allow: /ai-tools-guide
+Allow: /faq
+Allow: /privacy-policy
+Allow: /terms-of-service
+Allow: /cookie-policy
+Allow: /disclaimer
+Allow: /contact-us
+Disallow: /api/
+Disallow: /admin
+
+# Search Engine Sitemap
+Sitemap: https://kiran-ai-video-studio.vercel.app/sitemap.xml

@@ -4,6 +4,9 @@ import dotenv from 'dotenv';
 dotenv.config({ override: true });
 import cookieParser from 'cookie-parser';
 import crypto from 'crypto';
+import path from 'path';
+import fs from 'fs';
+import bcrypt from 'bcryptjs';
 import { GoogleGenAI } from '@google/genai';
 import { neon } from '@neondatabase/serverless';
 // ============================================================================
@@ -1046,7 +1049,24 @@ export async function ensureUsersSchema(force = false): Promise<void> {
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_notifications_event_key ON admin_notifications(event_key)`,
-    `CREATE INDEX IF NOT EXISTS idx_admin_notifications_created_at ON admin_notifications(created_at DESC)`
+    `CREATE INDEX IF NOT EXISTS idx_admin_notifications_created_at ON admin_notifications(created_at DESC)`,
+
+    // 17. Secure Authentication, Email Verification & OTP Verifications Table
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT false`,
+    `UPDATE users SET email_verified = true WHERE auth_provider = 'google' AND email_verified = false`,
+    `CREATE TABLE IF NOT EXISTS email_verifications (
+      id VARCHAR(64) PRIMARY KEY,
+      email VARCHAR(255) NOT NULL,
+      purpose VARCHAR(32) NOT NULL,
+      code_hash VARCHAR(128) NOT NULL,
+      attempts INTEGER DEFAULT 0 NOT NULL,
+      max_attempts INTEGER DEFAULT 5 NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_email_verif_lookup ON email_verifications (LOWER(email), purpose)`,
+    `CREATE INDEX IF NOT EXISTS idx_email_verif_expires ON email_verifications (expires_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_users_email_verified ON users (email_verified)`
   ];
 
   for (const ddl of migrationStatements) {
@@ -2040,7 +2060,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   if (!req.user) {
     res.status(401).json({
       success: false,
-      error: 'Authentication required. Please sign in with Google to access this feature.'
+      error: 'Authentication required. Please sign in to access this feature.'
     });
     return;
   }
@@ -2056,10 +2076,754 @@ export async function revokeSession(sessionId: string): Promise<void> {
   }
 }
 
+
+// ==========================================
+// SECURE EMAIL OTP & RECAPTCHA HELPERS
+// ==========================================
+
+export function generateSixDigitOtp(): string {
+  return crypto.randomInt(100000, 1000000).toString();
+}
+
+export function hashOtpCode(email: string, code: string, purpose: string): string {
+  return crypto
+    .createHmac('sha256', getSessionSecret())
+    .update(`${email.toLowerCase().trim()}:${purpose}:${code.trim()}`)
+    .digest('hex');
+}
+
+export async function verifyRecaptcha(token?: string, ip?: string): Promise<{ success: boolean; error?: string }> {
+  const secret = process.env.RECAPTCHA_SECRET_KEY?.trim();
+  if (!secret) {
+    return { success: true };
+  }
+  if (!token || typeof token !== 'string') {
+    return { success: false, error: 'reCAPTCHA security challenge required. Please try again.' };
+  }
+  try {
+    const params = new URLSearchParams({
+      secret,
+      response: token,
+      ...(ip ? { remoteip: ip } : {})
+    });
+    const res = await fetch('https://www.google.com/recaptcha/api/siteverify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString()
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!data.success) {
+      const errorCodes = Array.isArray(data['error-codes']) ? data['error-codes'].join(', ') : 'Verification failed';
+      return { success: false, error: `reCAPTCHA validation failed (${errorCodes}). Please try again.` };
+    }
+    if (typeof data.score === 'number' && data.score < 0.3) {
+      return { success: false, error: 'Suspicious bot traffic detected. Please try again.' };
+    }
+    return { success: true };
+  } catch (err: any) {
+    console.error('reCAPTCHA siteverify error:', err);
+    return { success: false, error: 'Failed to verify reCAPTCHA with Google servers.' };
+  }
+}
+
+export async function sendOtpEmail(
+  toEmail: string,
+  code: string,
+  purpose: 'signup' | 'reset'
+): Promise<{ success: boolean; id?: string; error?: string }> {
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+  const kathmanduTime = getKathmanduTimestamp();
+  const from = getFromEmailAddress();
+  const title = purpose === 'signup' ? 'Verify Your Email Address' : 'Reset Your Password';
+  const subtitle = purpose === 'signup' 
+    ? 'Thank you for joining Kiran AI Video Studio. Use this 6-digit verification code to complete your registration:'
+    : 'We received a request to reset your Kiran AI Video Studio account password. Use this 6-digit recovery code:';
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>${title} - Kiran AI Video Studio</title>
+      </head>
+      <body style="margin: 0; padding: 24px 12px; background-color: #060913; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+        <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 540px; background-color: #0f1422; border: 1px solid #1e293b; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);">
+          <tr>
+            <td style="padding: 24px 28px; background: linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%); border-bottom: 1px solid #334155;">
+              <div style="font-size: 18px; font-weight: 800; color: #ffffff; letter-spacing: -0.5px;">
+                ⚡ Kiran AI Video Studio
+              </div>
+              <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">
+                Secure Identity &amp; Creator Authentication
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 32px 28px;">
+              <h2 style="margin: 0 0 12px 0; font-size: 20px; font-weight: 700; color: #ffffff;">
+                ${title}
+              </h2>
+              <p style="margin: 0 0 24px 0; font-size: 13px; color: #94a3b8; line-height: 1.6;">
+                ${subtitle}
+              </p>
+              <div style="text-align: center; margin: 28px 0; padding: 20px; background: #060913; border: 1px solid #22d3ee40; border-radius: 12px;">
+                <div style="font-size: 34px; font-weight: 900; letter-spacing: 10px; color: #22d3ee; font-family: monospace;">
+                  ${code}
+                </div>
+                <div style="font-size: 11px; color: #94a3b8; margin-top: 8px; font-weight: 600;">
+                  ⏱️ Expires in 10 minutes &bull; One-time use only
+                </div>
+              </div>
+              <p style="margin: 20px 0 0 0; font-size: 12px; color: #64748b; line-height: 1.5;">
+                If you did not make this request, please ignore this email or contact support. Never share this code with anyone.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 16px 28px; background-color: #0b0f19; border-top: 1px solid #1e293b; text-align: center;">
+              <p style="margin: 0; font-size: 11px; color: #64748b;">
+                Sent at ${kathmanduTime} &bull; Operator: Kiran Chaulagain
+              </p>
+              <p style="margin: 4px 0 0 0; font-size: 10px; color: #475569;">
+                Kiran AI Video Studio &bull; Direct Secure Authentication Pipeline
+              </p>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>
+  `;
+
+  if (!apiKey || apiKey === 'YOUR_RESEND_API_KEY') {
+    console.warn(`[OTP Service Notice] RESEND_API_KEY not configured. OTP code for ${toEmail}: [${code}] (Valid for 10 min).`);
+    return { success: true };
+  }
+
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from,
+        to: [toEmail.toLowerCase().trim()],
+        subject: `[Kiran AI Studio] Your Verification Code: ${code}`,
+        html,
+        text: `Your Kiran AI Video Studio verification code is: ${code}\n\nThis code expires in 10 minutes.\nTimestamp: ${kathmanduTime}`
+      })
+    });
+
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const errMsg = data?.message || data?.error || `HTTP ${res.status} from Resend`;
+      console.warn(`[OTP Email Error] Failed to send OTP to ${toEmail}:`, errMsg);
+      return { success: false, error: errMsg };
+    }
+    console.log(`[OTP Email Success] Sent verification code to ${toEmail} (Resend ID: ${data?.id}).`);
+    return { success: true, id: data?.id };
+  } catch (err: any) {
+    console.error(`[OTP Email Network Error]`, err?.message || err);
+    return { success: false, error: err?.message || 'Network error sending verification email' };
+  }
+}
+
 // ==========================================
 // AUTH ROUTER SETUP
 // ==========================================
 const authRouter = express.Router();
+
+// ----------------------------------------------------
+// EMAIL/PASSWORD SIGNUP
+// ----------------------------------------------------
+authRouter.post(['/signup', '/auth/signup', '/api/auth/signup'], async (req: Request, res: Response) => {
+  try {
+    if (!isDbConfigured()) {
+      return res.status(503).json({ success: false, error: 'Database is not configured. DATABASE_URL is required.' });
+    }
+
+    const { email, password, display_username, recaptchaToken } = req.body || {};
+
+    // 1. Verify reCAPTCHA token if configured
+    const captchaRes = await verifyRecaptcha(recaptchaToken, req.ip);
+    if (!captchaRes.success) {
+      return res.status(400).json({ success: false, error: captchaRes.error });
+    }
+
+    // 2. Validate email
+    const cleanEmail = (email || '').toLowerCase().trim();
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({ success: false, error: 'Please provide a valid email address.' });
+    }
+
+    // 3. Validate password complexity (min 8 chars, 1 uppercase, 1 lowercase, 1 number)
+    const cleanPassword = typeof password === 'string' ? password : '';
+    if (cleanPassword.length < 8) {
+      return res.status(400).json({ success: false, error: 'Password must be at least 8 characters long.' });
+    }
+    if (!/[A-Z]/.test(cleanPassword) || !/[a-z]/.test(cleanPassword) || !/[0-9]/.test(cleanPassword)) {
+      return res.status(400).json({ success: false, error: 'Password must contain at least one uppercase letter, one lowercase letter, and one number.' });
+    }
+
+    const displayName = (display_username || cleanEmail.split('@')[0] || 'Creator').trim().slice(0, 50);
+
+    // 4. Ensure schema exists
+    await ensureUsersSchema();
+
+    // 5. Check if user already exists
+    const existing = await query<any>(
+      `SELECT id, email, email_verified, auth_provider, password_hash FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+      [cleanEmail]
+    );
+
+    const passwordHash = await bcrypt.hash(cleanPassword, 12);
+    let userId: string;
+
+    if (existing && existing.length > 0) {
+      const u = existing[0];
+      if (u.email_verified) {
+        return res.status(409).json({
+          success: false,
+          error: 'An account with this email address already exists. Please sign in.'
+        });
+      }
+      // Unverified existing account: update password hash and display name
+      userId = u.id;
+      await query(
+        `UPDATE users SET password_hash = $1, display_username = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
+        [passwordHash, displayName, userId]
+      );
+    } else {
+      // Create new user in Neon
+      userId = `usr_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+      const baseUsername = cleanEmail.split('@')[0].replace(/[^a-z0-9_]/g, '').slice(0, 20) || 'creator';
+      const uniqueUsername = `${baseUsername}_${Math.floor(1000 + Math.random() * 9000)}`;
+
+      await query(
+        `INSERT INTO users (
+          id, username, display_username, email, auth_provider, password_hash, role, status, email_verified
+        ) VALUES ($1, $2, $3, $4, 'local', $5, 'user', 'active', false)`,
+        [userId, uniqueUsername, displayName, cleanEmail, passwordHash]
+      );
+    }
+
+    // 6. Generate secure 6-digit OTP
+    const otpCode = generateSixDigitOtp();
+    const codeHash = hashOtpCode(cleanEmail, otpCode, 'signup_verification');
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    const verifId = `v_${crypto.randomUUID().replace(/-/g, '').slice(0, 20)}`;
+
+    // Invalidate previous unverified signup OTPs for this email
+    await query(
+      `DELETE FROM email_verifications WHERE LOWER(email) = LOWER($1) AND purpose = 'signup_verification'`,
+      [cleanEmail]
+    ).catch(() => {});
+
+    // Insert new OTP record
+    await query(
+      `INSERT INTO email_verifications (id, email, purpose, code_hash, expires_at)
+       VALUES ($1, $2, 'signup_verification', $3, $4)`,
+      [verifId, cleanEmail, codeHash, expiresAt]
+    );
+
+    // 7. Send OTP email via Resend
+    await sendOtpEmail(cleanEmail, otpCode, 'signup');
+
+    res.status(200).json({
+      success: true,
+      message: 'Account created! A 6-digit verification code has been sent to your email.',
+      email: cleanEmail
+    });
+  } catch (err: any) {
+    console.error('Signup error:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Failed to complete registration.' });
+  }
+});
+
+// ----------------------------------------------------
+// VERIFY OTP (SIGNUP OR PASSWORD RESET)
+// ----------------------------------------------------
+authRouter.post(['/verify-otp', '/auth/verify-otp', '/api/auth/verify-otp'], async (req: Request, res: Response) => {
+  try {
+    if (!isDbConfigured()) {
+      return res.status(503).json({ success: false, error: 'Database is not configured.' });
+    }
+
+    const { email, code, purpose = 'signup_verification', recaptchaToken } = req.body || {};
+
+    const captchaRes = await verifyRecaptcha(recaptchaToken, req.ip);
+    if (!captchaRes.success) {
+      return res.status(400).json({ success: false, error: captchaRes.error });
+    }
+
+    const cleanEmail = (email || '').toLowerCase().trim();
+    const cleanCode = (code || '').trim();
+
+    if (!cleanEmail || !cleanCode || !/^\d{6}$/.test(cleanCode)) {
+      return res.status(400).json({ success: false, error: 'Please enter a valid 6-digit verification code.' });
+    }
+
+    // 1. Retrieve active verification record
+    const records = await query<any>(
+      `SELECT * FROM email_verifications 
+       WHERE LOWER(email) = LOWER($1) AND purpose = $2 AND expires_at > CURRENT_TIMESTAMP 
+       ORDER BY created_at DESC LIMIT 1`,
+      [cleanEmail, purpose]
+    );
+
+    if (!records || records.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Verification code is invalid or has expired (10-minute limit). Please request a new code.'
+      });
+    }
+
+    const record = records[0];
+
+    // 2. Check failed attempts limit
+    if (record.attempts >= record.max_attempts) {
+      await query(`DELETE FROM email_verifications WHERE id = $1`, [record.id]).catch(() => {});
+      return res.status(429).json({
+        success: false,
+        error: 'Too many incorrect attempts. This code has been invalidated for security. Please request a new code.'
+      });
+    }
+
+    // 3. Compare code hash
+    const expectedHash = hashOtpCode(cleanEmail, cleanCode, purpose);
+    if (record.code_hash !== expectedHash) {
+      const newAttempts = record.attempts + 1;
+      await query(`UPDATE email_verifications SET attempts = $1 WHERE id = $2`, [newAttempts, record.id]);
+      const remaining = Math.max(0, record.max_attempts - newAttempts);
+      return res.status(400).json({
+        success: false,
+        error: remaining > 0 
+          ? `Incorrect code. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`
+          : 'Incorrect code. Attempts limit reached, please request a new code.'
+      });
+    }
+
+    // 4. Code verified: delete used record
+    await query(`DELETE FROM email_verifications WHERE id = $1`, [record.id]).catch(() => {});
+
+    if (purpose === 'signup_verification') {
+      // Mark user email verified
+      await query(
+        `UPDATE users SET email_verified = true, status = 'active', updated_at = CURRENT_TIMESTAMP WHERE LOWER(email) = LOWER($1)`,
+        [cleanEmail]
+      );
+
+      // Fetch user profile
+      const userRows = await query<any>(
+        `SELECT id, username, display_username, email, role, status, avatar, auth_provider FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+        [cleanEmail]
+      );
+
+      if (!userRows || userRows.length === 0) {
+        return res.status(404).json({ success: false, error: 'User account not found.' });
+      }
+
+      const u = userRows[0];
+      const authUser: AuthUser = {
+        id: u.id,
+        username: u.username,
+        display_username: u.display_username || u.username,
+        email: u.email,
+        role: u.role || 'user',
+        status: u.status || 'active',
+        avatar: u.avatar || null,
+        auth_provider: u.auth_provider || 'local'
+      };
+
+      // Establish session
+      const session = await createUserSession(authUser.id, req);
+      setSessionCookie(res, session.cookieValue, req);
+
+      notifyAdminNewUserSignup(authUser, query).catch(() => {});
+
+      return res.status(200).json({
+        success: true,
+        message: 'Email successfully verified! Welcome to Kiran AI Video Studio.',
+        user: authUser
+      });
+    }
+
+    if (purpose === 'password_reset') {
+      return res.status(200).json({
+        success: true,
+        message: 'Verification code confirmed. You may now set your new password.'
+      });
+    }
+
+    res.status(200).json({ success: true, message: 'Verification successful.' });
+  } catch (err: any) {
+    console.error('Verify OTP error:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Verification error.' });
+  }
+});
+
+// ----------------------------------------------------
+// RESEND OTP
+// ----------------------------------------------------
+authRouter.post(['/resend-otp', '/auth/resend-otp', '/api/auth/resend-otp'], async (req: Request, res: Response) => {
+  try {
+    if (!isDbConfigured()) {
+      return res.status(503).json({ success: false, error: 'Database is not configured.' });
+    }
+
+    const { email, purpose = 'signup_verification', recaptchaToken } = req.body || {};
+
+    const captchaRes = await verifyRecaptcha(recaptchaToken, req.ip);
+    if (!captchaRes.success) {
+      return res.status(400).json({ success: false, error: captchaRes.error });
+    }
+
+    const cleanEmail = (email || '').toLowerCase().trim();
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({ success: false, error: 'Please provide a valid email address.' });
+    }
+
+    // 1. Enforce 60-second cooldown
+    const recent = await query<any>(
+      `SELECT created_at FROM email_verifications 
+       WHERE LOWER(email) = LOWER($1) AND purpose = $2 AND created_at > (CURRENT_TIMESTAMP - INTERVAL '60 seconds')
+       ORDER BY created_at DESC LIMIT 1`,
+      [cleanEmail, purpose]
+    );
+
+    if (recent && recent.length > 0) {
+      return res.status(429).json({
+        success: false,
+        error: 'Please wait 60 seconds before requesting a new verification code.'
+      });
+    }
+
+    // 2. Generate new OTP
+    const otpCode = generateSixDigitOtp();
+    const codeHash = hashOtpCode(cleanEmail, otpCode, purpose);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    const verifId = `v_${crypto.randomUUID().replace(/-/g, '').slice(0, 20)}`;
+
+    // Invalidate previous OTPs for this purpose
+    await query(
+      `DELETE FROM email_verifications WHERE LOWER(email) = LOWER($1) AND purpose = $2`,
+      [cleanEmail, purpose]
+    ).catch(() => {});
+
+    // Insert new OTP record
+    await query(
+      `INSERT INTO email_verifications (id, email, purpose, code_hash, expires_at)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [verifId, cleanEmail, purpose, codeHash, expiresAt]
+    );
+
+    // Send email
+    await sendOtpEmail(cleanEmail, otpCode, purpose === 'password_reset' ? 'reset' : 'signup');
+
+    res.status(200).json({
+      success: true,
+      message: 'A fresh 6-digit verification code has been sent to your email.'
+    });
+  } catch (err: any) {
+    console.error('Resend OTP error:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Failed to resend code.' });
+  }
+});
+
+// ----------------------------------------------------
+// EMAIL/PASSWORD LOGIN
+// ----------------------------------------------------
+authRouter.post(['/login', '/auth/login', '/api/auth/login'], async (req: Request, res: Response) => {
+  try {
+    if (!isDbConfigured()) {
+      return res.status(503).json({ success: false, error: 'Database is not configured. DATABASE_URL is required.' });
+    }
+
+    const { email, password, recaptchaToken } = req.body || {};
+
+    const captchaRes = await verifyRecaptcha(recaptchaToken, req.ip);
+    if (!captchaRes.success) {
+      return res.status(400).json({ success: false, error: captchaRes.error });
+    }
+
+    const cleanEmail = (email || '').toLowerCase().trim();
+    const cleanPassword = typeof password === 'string' ? password : '';
+
+    if (!cleanEmail || !cleanPassword) {
+      return res.status(400).json({ success: false, error: 'Please enter both email and password.' });
+    }
+
+    await ensureUsersSchema();
+
+    // Query user
+    const rows = await query<any>(
+      `SELECT id, username, display_username, email, role, status, avatar, auth_provider, password_hash, email_verified
+       FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+      [cleanEmail]
+    );
+
+    if (!rows || rows.length === 0) {
+      return res.status(401).json({ success: false, error: 'Invalid email or password.' });
+    }
+
+    const u = rows[0];
+
+    // If OAuth-only account without password
+    if (u.auth_provider === 'google' && !u.password_hash) {
+      return res.status(400).json({
+        success: false,
+        error: 'This account was created with Google. Please click Continue with Google to sign in.'
+      });
+    }
+
+    if (!u.password_hash) {
+      return res.status(401).json({ success: false, error: 'Invalid email or password.' });
+    }
+
+    // Verify password with bcrypt
+    const match = await bcrypt.compare(cleanPassword, u.password_hash);
+    if (!match) {
+      return res.status(401).json({ success: false, error: 'Invalid email or password.' });
+    }
+
+    // If email is not yet verified: automatically dispatch code and request verification
+    if (!u.email_verified) {
+      const otpCode = generateSixDigitOtp();
+      const codeHash = hashOtpCode(cleanEmail, otpCode, 'signup_verification');
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+      const verifId = `v_${crypto.randomUUID().replace(/-/g, '').slice(0, 20)}`;
+
+      await query(
+        `DELETE FROM email_verifications WHERE LOWER(email) = LOWER($1) AND purpose = 'signup_verification'`,
+        [cleanEmail]
+      ).catch(() => {});
+
+      await query(
+        `INSERT INTO email_verifications (id, email, purpose, code_hash, expires_at)
+         VALUES ($1, $2, 'signup_verification', $3, $4)`,
+        [verifId, cleanEmail, codeHash, expiresAt]
+      );
+
+      await sendOtpEmail(cleanEmail, otpCode, 'signup');
+
+      return res.status(403).json({
+        success: false,
+        requiresVerification: true,
+        email: cleanEmail,
+        error: 'Your email address is not yet verified. A 6-digit verification code has been sent to your email.'
+      });
+    }
+
+    if (u.status === 'suspended') {
+      return res.status(403).json({
+        success: false,
+        error: 'Your account has been suspended. Please contact support at Kiranchaulagain094@gmail.com.'
+      });
+    }
+
+    const authUser: AuthUser = {
+      id: u.id,
+      username: u.username,
+      display_username: u.display_username || u.username,
+      email: u.email,
+      role: u.role || 'user',
+      status: u.status || 'active',
+      avatar: u.avatar || null,
+      auth_provider: u.auth_provider || 'local'
+    };
+
+    // Establish session
+    const session = await createUserSession(authUser.id, req);
+    setSessionCookie(res, session.cookieValue, req);
+
+    res.status(200).json({
+      success: true,
+      message: 'Signed in successfully!',
+      user: authUser
+    });
+  } catch (err: any) {
+    console.error('Login error:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Login failed.' });
+  }
+});
+
+// ----------------------------------------------------
+// FORGOT PASSWORD (REQUEST 6-DIGIT RESET CODE)
+// ----------------------------------------------------
+authRouter.post(['/forgot-password', '/auth/forgot-password', '/api/auth/forgot-password'], async (req: Request, res: Response) => {
+  try {
+    if (!isDbConfigured()) {
+      return res.status(503).json({ success: false, error: 'Database is not configured.' });
+    }
+
+    const { email, recaptchaToken } = req.body || {};
+
+    const captchaRes = await verifyRecaptcha(recaptchaToken, req.ip);
+    if (!captchaRes.success) {
+      return res.status(400).json({ success: false, error: captchaRes.error });
+    }
+
+    const cleanEmail = (email || '').toLowerCase().trim();
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({ success: false, error: 'Please enter a valid email address.' });
+    }
+
+    // Always respond with success to avoid account enumeration
+    const genericResponse = {
+      success: true,
+      message: 'If an account exists with this email address, a 6-digit recovery code has been sent.',
+      email: cleanEmail
+    };
+
+    const rows = await query<any>(
+      `SELECT id, email, status FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+      [cleanEmail]
+    );
+
+    if (rows && rows.length > 0 && rows[0].status !== 'suspended') {
+      const otpCode = generateSixDigitOtp();
+      const codeHash = hashOtpCode(cleanEmail, otpCode, 'password_reset');
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+      const verifId = `v_${crypto.randomUUID().replace(/-/g, '').slice(0, 20)}`;
+
+      await query(
+        `DELETE FROM email_verifications WHERE LOWER(email) = LOWER($1) AND purpose = 'password_reset'`,
+        [cleanEmail]
+      ).catch(() => {});
+
+      await query(
+        `INSERT INTO email_verifications (id, email, purpose, code_hash, expires_at)
+         VALUES ($1, $2, 'password_reset', $3, $4)`,
+        [verifId, cleanEmail, codeHash, expiresAt]
+      );
+
+      await sendOtpEmail(cleanEmail, otpCode, 'reset');
+    }
+
+    res.status(200).json(genericResponse);
+  } catch (err: any) {
+    console.error('Forgot password error:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Failed to process request.' });
+  }
+});
+
+// ----------------------------------------------------
+// RESET PASSWORD (SUBMIT 6-DIGIT CODE + NEW PASSWORD)
+// ----------------------------------------------------
+authRouter.post(['/reset-password', '/auth/reset-password', '/api/auth/reset-password'], async (req: Request, res: Response) => {
+  try {
+    if (!isDbConfigured()) {
+      return res.status(503).json({ success: false, error: 'Database is not configured.' });
+    }
+
+    const { email, code, newPassword, recaptchaToken } = req.body || {};
+
+    const captchaRes = await verifyRecaptcha(recaptchaToken, req.ip);
+    if (!captchaRes.success) {
+      return res.status(400).json({ success: false, error: captchaRes.error });
+    }
+
+    const cleanEmail = (email || '').toLowerCase().trim();
+    const cleanCode = (code || '').trim();
+    const cleanPassword = typeof newPassword === 'string' ? newPassword : '';
+
+    if (!cleanEmail || !cleanCode || !/^\d{6}$/.test(cleanCode)) {
+      return res.status(400).json({ success: false, error: 'Please enter the 6-digit code sent to your email.' });
+    }
+
+    if (cleanPassword.length < 8) {
+      return res.status(400).json({ success: false, error: 'New password must be at least 8 characters long.' });
+    }
+    if (!/[A-Z]/.test(cleanPassword) || !/[a-z]/.test(cleanPassword) || !/[0-9]/.test(cleanPassword)) {
+      return res.status(400).json({ success: false, error: 'New password must contain at least one uppercase letter, one lowercase letter, and one number.' });
+    }
+
+    // Verify OTP code
+    const records = await query<any>(
+      `SELECT * FROM email_verifications 
+       WHERE LOWER(email) = LOWER($1) AND purpose = 'password_reset' AND expires_at > CURRENT_TIMESTAMP 
+       ORDER BY created_at DESC LIMIT 1`,
+      [cleanEmail]
+    );
+
+    if (!records || records.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Reset code is invalid or has expired (10-minute limit). Please request a new code.'
+      });
+    }
+
+    const record = records[0];
+    if (record.attempts >= record.max_attempts) {
+      await query(`DELETE FROM email_verifications WHERE id = $1`, [record.id]).catch(() => {});
+      return res.status(429).json({
+        success: false,
+        error: 'Too many incorrect attempts. This code has been invalidated. Please request a new code.'
+      });
+    }
+
+    const expectedHash = hashOtpCode(cleanEmail, cleanCode, 'password_reset');
+    if (record.code_hash !== expectedHash) {
+      const newAttempts = record.attempts + 1;
+      await query(`UPDATE email_verifications SET attempts = $1 WHERE id = $2`, [newAttempts, record.id]);
+      return res.status(400).json({ success: false, error: 'Incorrect 6-digit recovery code.' });
+    }
+
+    // Delete used OTP
+    await query(`DELETE FROM email_verifications WHERE id = $1`, [record.id]).catch(() => {});
+
+    // Hash new password
+    const passwordHash = await bcrypt.hash(cleanPassword, 12);
+
+    // Update user password and ensure email_verified is true
+    await query(
+      `UPDATE users SET password_hash = $1, email_verified = true, updated_at = CURRENT_TIMESTAMP WHERE LOWER(email) = LOWER($2)`,
+      [passwordHash, cleanEmail]
+    );
+
+    // Fetch user
+    const rows = await query<any>(
+      `SELECT id, username, display_username, email, role, status, avatar, auth_provider FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1`,
+      [cleanEmail]
+    );
+
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found.' });
+    }
+
+    const u = rows[0];
+
+    // Revoke all existing sessions for this user for security
+    await query(`DELETE FROM user_sessions WHERE user_id = $1`, [u.id]).catch(() => {});
+
+    const authUser: AuthUser = {
+      id: u.id,
+      username: u.username,
+      display_username: u.display_username || u.username,
+      email: u.email,
+      role: u.role || 'user',
+      status: u.status || 'active',
+      avatar: u.avatar || null,
+      auth_provider: u.auth_provider || 'local'
+    };
+
+    // Create fresh session
+    const session = await createUserSession(authUser.id, req);
+    setSessionCookie(res, session.cookieValue, req);
+
+    res.status(200).json({
+      success: true,
+      message: 'Password has been reset successfully! You are now logged in.',
+      user: authUser
+    });
+  } catch (err: any) {
+    console.error('Reset password error:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Password reset failed.' });
+  }
+});
+
 
 authRouter.get(['/config', '/auth/config', '/api/auth/config'], (req: Request, res: Response) => {
   try {
@@ -2096,7 +2860,13 @@ authRouter.get(['/config', '/auth/config', '/api/auth/config'], (req: Request, r
         hasClientSecret: Boolean(process.env.GOOGLE_CLIENT_SECRET),
         hasDatabaseUrl: Boolean(process.env.DATABASE_URL),
         hasSessionSecret: Boolean(process.env.SESSION_SECRET),
-        hasAppUrl: Boolean(process.env.APP_URL)
+        hasAppUrl: Boolean(process.env.APP_URL),
+        hasRecaptchaSecret: Boolean(process.env.RECAPTCHA_SECRET_KEY),
+        hasRecaptchaSiteKey: Boolean(process.env.VITE_RECAPTCHA_SITE_KEY || process.env.RECAPTCHA_SITE_KEY)
+      },
+      recaptcha: {
+        isConfigured: Boolean(process.env.RECAPTCHA_SECRET_KEY),
+        siteKey: process.env.VITE_RECAPTCHA_SITE_KEY || process.env.RECAPTCHA_SITE_KEY || ''
       }
     });
   } catch (err: any) {
@@ -4109,17 +4879,107 @@ function generateCreativeWritingFallback(text: string, tool: string): string {
 }
 
 // System Status & Health Check Handler
-export function handleHealthCheck(req: express.Request, res: express.Response) {
+export async function handleHealthCheck(req: express.Request, res: express.Response) {
+  const startTime = Date.now();
   const hasGemini = Boolean(getGeminiApiKey());
+  const clientId = getCleanGoogleClientId();
+  const hasGoogleClientId = Boolean(clientId);
+  const hasGoogleClientSecret = Boolean(getCleanGoogleClientSecret());
+  const hasResend = isEmailConfigured();
+  const hasSessionSecret = Boolean(process.env.SESSION_SECRET?.trim());
+  const hasAppUrl = Boolean(process.env.APP_URL?.trim());
 
-  res.json({
-    ok: true,
-    status: 'ok',
+  // Database Connectivity Probe
+  const dbStatus: {
+    connected: boolean;
+    configured: boolean;
+    latencyMs?: number;
+    error?: string;
+  } = {
+    connected: false,
+    configured: isDbConfigured()
+  };
+
+  if (dbStatus.configured) {
+    try {
+      const sql = getDbClient();
+      if (sql) {
+        const pingPromise = sql.query('SELECT 1 AS alive');
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Database ping timed out after 3000ms')), 3000)
+        );
+        const queryStart = Date.now();
+        await Promise.race([pingPromise, timeoutPromise]);
+        dbStatus.connected = true;
+        dbStatus.latencyMs = Date.now() - queryStart;
+      }
+    } catch (err: any) {
+      dbStatus.connected = false;
+      dbStatus.error = err?.message || 'Database ping failed';
+    }
+  }
+
+  // Diagnostic warnings for missing configuration without exposing secrets
+  const warnings: string[] = [];
+  if (!dbStatus.configured) {
+    const rawDb = (process.env.DATABASE_URL || '').trim();
+    if (rawDb.startsWith('//') || rawDb.includes('prisma')) {
+      warnings.push('DATABASE_URL contains Prisma schema config text instead of a valid postgresql:// connection string.');
+    } else {
+      warnings.push('DATABASE_URL is missing or not a valid postgresql:// URI.');
+    }
+  } else if (!dbStatus.connected) {
+    warnings.push(`Database configured but ping failed: ${dbStatus.error || 'Connection unreachable'}`);
+  }
+
+  if (!hasGoogleClientId) {
+    warnings.push('GOOGLE_CLIENT_ID is missing.');
+  } else if (!clientId.includes('.apps.googleusercontent.com')) {
+    warnings.push(`GOOGLE_CLIENT_ID appears to be a project number ('${clientId}') rather than a Web Client ID.`);
+  }
+
+  if (!hasGoogleClientSecret) {
+    warnings.push('GOOGLE_CLIENT_SECRET is missing.');
+  }
+
+  if (!hasGemini) {
+    warnings.push('GEMINI_API_KEY is missing.');
+  }
+
+  if (!hasResend) {
+    warnings.push('RESEND_API_KEY is missing.');
+  }
+
+  const isHealthy = dbStatus.configured ? dbStatus.connected : true;
+  const status = isHealthy && warnings.length === 0 ? 'healthy' : (isHealthy ? 'degraded' : 'unhealthy');
+
+  // If client passes ?strict=true and database is down, return 503; otherwise return 200 with diagnostics
+  const isStrict = req.query.strict === 'true' || req.query.strict === '1';
+  const httpCode = (isStrict && (!dbStatus.connected || !dbStatus.configured)) ? 503 : 200;
+
+  res.status(httpCode).json({
+    ok: httpCode === 200,
+    status,
     service: 'Kiran AI Video Studio API',
     appName: 'Kiran AI Video Studio',
     version: CURRENT_APP_VERSION,
     operator: 'Kiran Chaulagain',
     contactEmail: 'kiranchaulagain094@gmail.com',
+    timestamp: new Date().toISOString(),
+    kathmanduTime: getKathmanduTimestamp(),
+    uptimeSeconds: Math.floor(process.uptime()),
+    responseTimeMs: Date.now() - startTime,
+    database: dbStatus,
+    environment: {
+      DATABASE_URL: dbStatus.configured,
+      GEMINI_API_KEY: hasGemini,
+      GOOGLE_CLIENT_ID: hasGoogleClientId,
+      GOOGLE_CLIENT_SECRET: hasGoogleClientSecret,
+      RESEND_API_KEY: hasResend,
+      SESSION_SECRET: hasSessionSecret,
+      APP_URL: hasAppUrl
+    },
+    warnings: warnings.length > 0 ? warnings : undefined,
     features: {
       geminiServerSide: hasGemini,
       videoPlanner: true,
@@ -4295,7 +5155,7 @@ apiRouter.post(['/contact', '/api/contact'], async (req: Request, res: Response)
 });
 
 // 1. AI Video Plan Generation
-apiRouter.post(['/ai/video-plan', '/api/ai/video-plan'], async (req, res) => {
+apiRouter.post(['/ai/video-plan', '/api/ai/video-plan'], requireAuth, async (req, res) => {
   try {
     const { name, idea, type, aspectRatio, duration, style, voice, language, music } = req.body;
     if (!idea || typeof idea !== 'string' || idea.trim() === '') {
@@ -4363,7 +5223,7 @@ Respond ONLY with valid JSON:
 });
 
 // 2. Shorts & Reels Plan Generation
-apiRouter.post(['/ai/shorts-plan', '/api/ai/shorts-plan'], async (req, res) => {
+apiRouter.post(['/ai/shorts-plan', '/api/ai/shorts-plan'], requireAuth, async (req, res) => {
   try {
     const { topic, hook, script, visualStyle, voice, music, captionStyle } = req.body;
     if (!topic || typeof topic !== 'string' || topic.trim() === '') {
@@ -4441,7 +5301,7 @@ Respond ONLY with valid JSON matching this schema:
 });
 
 // 3. Social Repurposing Pack for Shorts
-apiRouter.post(['/ai/repurpose-shorts', '/api/ai/repurpose-shorts'], async (req, res) => {
+apiRouter.post(['/ai/repurpose-shorts', '/api/ai/repurpose-shorts'], requireAuth, async (req, res) => {
   try {
     const { topic, script } = req.body;
     if (!topic || typeof topic !== 'string' || topic.trim() === '') {
@@ -4527,7 +5387,7 @@ Respond ONLY with valid JSON:
 });
 
 // 4. Content Assistant (Full AIContentPack with 10 Title Archetypes & SEO Audit)
-apiRouter.post(['/ai/content-assistant', '/api/ai/content-assistant'], async (req, res) => {
+apiRouter.post(['/ai/content-assistant', '/api/ai/content-assistant'], requireAuth, async (req, res) => {
   try {
     const { videoType, targetAudience, language, mainKeyword } = req.body;
     const userTopic = (req.body.prompt || req.body.topic || req.body.idea || req.body.concept || '').trim();
@@ -4623,7 +5483,7 @@ Respond ONLY with valid JSON:
 });
 
 // 5. Creative Writing Tools (10 Live Actions)
-apiRouter.post(['/ai/writing-tool', '/api/ai/writing-tool'], async (req, res) => {
+apiRouter.post(['/ai/writing-tool', '/api/ai/writing-tool'], requireAuth, async (req, res) => {
   try {
     const text = (req.body.text || req.body.inputText || req.body.prompt || '').trim();
     const tool = (req.body.tool || req.body.toolType || 'Rewrite').trim();
@@ -4711,7 +5571,7 @@ Respond with ONLY a valid JSON object:
 });
 
 // 6. Creator AI Power Suite (Individual Tool Generators)
-apiRouter.post(['/ai/content-suite', '/api/ai/content-suite'], async (req, res) => {
+apiRouter.post(['/ai/content-suite', '/api/ai/content-suite'], requireAuth, async (req, res) => {
   try {
     const toolType = req.body.toolType || req.body.tool;
     const topic = (req.body.topic || req.body.prompt || req.body.inputText || req.body.idea || '').trim();
@@ -4835,7 +5695,7 @@ Respond ONLY with valid JSON:
 });
 
 // 7. Thumbnail Concept Blueprint
-apiRouter.post(['/ai/thumbnail-concept', '/api/ai/thumbnail-concept'], async (req, res) => {
+apiRouter.post(['/ai/thumbnail-concept', '/api/ai/thumbnail-concept'], requireAuth, async (req, res) => {
   try {
     const { style, aspectRatio } = req.body;
     const userIdea = (req.body.idea || req.body.title || req.body.concept || req.body.prompt || '').trim();
@@ -4897,7 +5757,7 @@ Respond ONLY with valid JSON:
 });
 
 // 8. Thumbnail Reference Image Vision Analysis (Gemini Multimodal Vision)
-apiRouter.post(['/ai/analyze-thumbnail-image', '/api/ai/analyze-thumbnail-image'], async (req, res) => {
+apiRouter.post(['/ai/analyze-thumbnail-image', '/api/ai/analyze-thumbnail-image'], requireAuth, async (req, res) => {
   try {
     const { imageBase64, mimeType, topic } = req.body;
     if (!imageBase64 || typeof imageBase64 !== 'string') {
@@ -4969,7 +5829,7 @@ Respond ONLY with valid JSON:
 });
 
 // 9. AI Thumbnail Image Generation (Imagen / Gemini Flash Image)
-apiRouter.post(['/ai/generate-thumbnail-image', '/api/ai/generate-thumbnail-image'], async (req, res) => {
+apiRouter.post(['/ai/generate-thumbnail-image', '/api/ai/generate-thumbnail-image'], requireAuth, async (req, res) => {
   try {
     const { prompt, aspectRatio } = req.body;
     if (!prompt || typeof prompt !== 'string' || prompt.trim() === '') {
@@ -5025,7 +5885,7 @@ apiRouter.post(['/ai/generate-thumbnail-image', '/api/ai/generate-thumbnail-imag
 });
 
 // 9. AI Template Maker Analysis Engine
-apiRouter.post(['/ai/analyze-template', '/api/ai/analyze-template'], async (req, res) => {
+apiRouter.post(['/ai/analyze-template', '/api/ai/analyze-template'], requireAuth, async (req, res) => {
   try {
     const { templateTitle, category, duration, durationSeconds, mediaSlots, slotsMetadata, language } = req.body;
     const ai = getGeminiClient();
@@ -5111,7 +5971,7 @@ Respond ONLY with valid JSON:
 });
 
 // 10. AI Website Guide & Creative Assistant (Multilingual, Context-Aware, Security-Hardened)
-apiRouter.post(['/ai/guide', '/api/ai/guide'], async (req, res) => {
+apiRouter.post(['/ai/guide', '/api/ai/guide'], requireAuth, async (req, res) => {
   try {
     const { message, history, imageBase64, mimeType } = req.body;
     const userMessage = (message || '').trim();
@@ -5561,7 +6421,7 @@ function normalizeTimelineScenes(scenes: any[], targetTotalSeconds: number = 60)
 }
 
 // 11. AI Video Timeline Planner with Screenshot + Google Flow Prompt Workflow
-apiRouter.post(['/ai/timeline-planner', '/api/ai/timeline-planner'], async (req, res) => {
+apiRouter.post(['/ai/timeline-planner', '/api/ai/timeline-planner'], requireAuth, async (req, res) => {
   try {
     const { topic, script, durationOption, videoStyle, language, visualStyle, aspectRatio } = req.body;
     if (!topic || typeof topic !== 'string' || topic.trim() === '') {
@@ -5753,7 +6613,7 @@ OUTPUT JSON FORMAT (Return ONLY raw valid JSON, no markdown outside JSON):
 });
 
 // 12. Regenerate Single Timeline Scene
-apiRouter.post(['/ai/timeline-regenerate-scene', '/api/ai/timeline-regenerate-scene'], async (req, res) => {
+apiRouter.post(['/ai/timeline-regenerate-scene', '/api/ai/timeline-regenerate-scene'], requireAuth, async (req, res) => {
   try {
     const { 
       topic, 
@@ -5824,7 +6684,7 @@ Return ONLY valid JSON:
 });
 
 // 13. Video Generation Background Jobs
-apiRouter.post(['/video/jobs', '/api/video/jobs'], async (req, res) => {
+apiRouter.post(['/video/jobs', '/api/video/jobs'], requireAuth, async (req, res) => {
   try {
     const job = await VideoGenerationService.startJob(req.body, req.user);
     res.json(job);
@@ -5833,7 +6693,7 @@ apiRouter.post(['/video/jobs', '/api/video/jobs'], async (req, res) => {
   }
 });
 
-apiRouter.get(['/video/jobs/:id', '/api/video/jobs/:id'], async (req, res) => {
+apiRouter.get(['/video/jobs/:id', '/api/video/jobs/:id'], requireAuth, async (req, res) => {
   try {
     const job = await VideoGenerationService.getJobStatus(req.params.id);
     res.json(job);
@@ -5886,6 +6746,55 @@ app.use('/api', apiRouter);
 
 // Standalone health and status endpoints across all route variants
 app.get(['/health', '/status', '/api/health', '/api/status'], handleHealthCheck);
+
+// SEO: Crawlable robots.txt endpoint
+app.get(['/robots.txt', '/api/robots.txt'], (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  
+  const publicRobots = path.join(process.cwd(), 'public', 'robots.txt');
+  if (fs.existsSync(publicRobots)) {
+    return res.sendFile(publicRobots);
+  }
+  
+  res.send(`# Kiran AI Video Studio - Robots Configuration
+# Canonical: https://kiran-ai-video-studio.vercel.app/
+
+User-agent: *
+Allow: /
+Allow: /articles
+Allow: /articles/*
+Allow: /about-us
+Allow: /how-to-use
+Allow: /ai-tools-guide
+Allow: /faq
+Allow: /privacy-policy
+Allow: /terms-of-service
+Allow: /cookie-policy
+Allow: /disclaimer
+Allow: /contact-us
+Disallow: /api/
+Disallow: /admin
+
+# Search Engine Sitemap
+Sitemap: https://kiran-ai-video-studio.vercel.app/sitemap.xml
+`);
+});
+
+// SEO: Search Engine XML Sitemap endpoint
+app.get(['/sitemap.xml', '/api/sitemap.xml'], (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  
+  const publicSitemap = path.join(process.cwd(), 'public', 'sitemap.xml');
+  const distSitemap = path.join(process.cwd(), 'dist', 'sitemap.xml');
+  if (fs.existsSync(publicSitemap)) {
+    return res.sendFile(publicSitemap);
+  } else if (fs.existsSync(distSitemap)) {
+    return res.sendFile(distSitemap);
+  }
+  res.status(404).send('<!-- Sitemap not found -->');
+});
 
 export { app, apiRouter, authRouter, projectRouter, adminRouter, templateRouter, updateRouter };
 

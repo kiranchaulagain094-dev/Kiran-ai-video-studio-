@@ -32,6 +32,7 @@ import { StudioApiService } from './services/api';
 import { UpdateNotificationModal } from './components/common/UpdateNotificationModal';
 import { PWAInstallPrompt } from './components/common/PWAInstallPrompt';
 import { AuthModal } from './components/common/AuthModal';
+import { AuthRequiredScreen } from './components/common/AuthRequiredScreen';
 import { useAuth } from './context/AuthContext';
 import { CURRENT_APP_VERSION, APP_VERSION_STORAGE_KEY, compareSemVer } from './config/version';
 import { 
@@ -346,8 +347,67 @@ export default function App() {
       highBitrateRender: true
     };
   });
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, isLoading, intendedRoute, setIntendedRoute } = useAuth();
   const [preferencesSaved, setPreferencesSaved] = useState(false);
+
+  // Private routes definition requiring authenticated session
+  const PRIVATE_ROUTES: Record<string, { name: string; description: string }> = {
+    'video-generator': { 
+      name: 'AI Video Planner & Generator', 
+      description: 'Generate multi-scene cinematic video plans, visual prompts, and camera directions with Veo and Gemini.' 
+    },
+    'shorts-creator': { 
+      name: 'Shorts & Reels Creator (9:16)', 
+      description: 'Create high-retention viral vertical video scripts, audio hooks, and fast-paced scene plans.' 
+    },
+    'timeline-planner': { 
+      name: '1-Minute Timeline Planner', 
+      description: 'Design precisely timed, scene-by-scene 60-second video storyboards with audio beat cues.' 
+    },
+    'video-editor': { 
+      name: 'Timeline Video Editor', 
+      description: 'Edit project scenes, adjust timing, preview outputs, and manage creative video timelines.' 
+    },
+    'content-assistant': { 
+      name: 'AI Content & SEO Assistant', 
+      description: 'Generate high-CTR YouTube titles, descriptions, keyword tags, and social scripts.' 
+    },
+    'thumbnail-maker': { 
+      name: 'Thumbnail Concept Maker', 
+      description: 'Design viral thumbnail concepts with visual prompts, composition layouts, and text overlays.' 
+    },
+    'projects': { 
+      name: 'My Cloud Projects', 
+      description: 'View, organize, and sync your video projects safely in Neon PostgreSQL.' 
+    },
+    'templates': { 
+      name: 'Templates Library', 
+      description: 'Use proven video templates and auto-align your media slots into finished videos.' 
+    },
+    'music-video': { 
+      name: 'Music Video Storyboarder', 
+      description: 'Plan beat-synced visuals and emotional storyboard shots for music releases.' 
+    },
+    'settings': { 
+      name: 'Studio Settings & Preferences', 
+      description: 'Customize generation defaults, aspect ratios, languages, and workspace data.' 
+    },
+    'admin': { 
+      name: 'Admin Control Center', 
+      description: 'System operations, template curation, and live deployment updates.' 
+    }
+  };
+
+  const isCurrentRoutePrivate = Boolean(PRIVATE_ROUTES[currentRoute]);
+
+  // When user successfully authenticates and an intendedRoute was queued, navigate there automatically
+  useEffect(() => {
+    if (isAuthenticated && intendedRoute) {
+      const target = intendedRoute;
+      setIntendedRoute(null);
+      navigateTo(target);
+    }
+  }, [isAuthenticated, intendedRoute]);
 
   const refreshProjects = async () => {
     const fresh = await StudioApiService.fetchProjects();
@@ -461,8 +521,25 @@ export default function App() {
             />
           )}
 
+          {/* Protected Creative Workspace Barrier for Unauthenticated Users */}
+          {isCurrentRoutePrivate && !isAuthenticated && !isLoading && (
+            <AuthRequiredScreen
+              toolName={PRIVATE_ROUTES[currentRoute]?.name || 'Creator Workspace'}
+              toolDescription={PRIVATE_ROUTES[currentRoute]?.description || ''}
+              intendedRoute={currentRoute}
+            />
+          )}
+
+          {/* Loading Barrier while validating session */}
+          {isCurrentRoutePrivate && isLoading && (
+            <div className="flex flex-col items-center justify-center py-24 space-y-3">
+              <div className="w-10 h-10 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+              <p className="text-xs text-slate-400">Verifying secure creator session...</p>
+            </div>
+          )}
+
           {/* AI Video Planner */}
-          {currentRoute === 'video-generator' && (
+          {currentRoute === 'video-generator' && isAuthenticated && (
             <VideoGenerator
               initialTemplatePrompt={initialGeneratorPrompt}
               onProjectCreated={(newProject) => {
@@ -480,7 +557,7 @@ export default function App() {
           )}
 
           {/* Shorts & Reels Creator (9:16) */}
-          {currentRoute === 'shorts-creator' && (
+          {currentRoute === 'shorts-creator' && isAuthenticated && (
             <ShortsCreator
               initialTopic={shortsPrefill.topic}
               initialHook={shortsPrefill.hook}
@@ -521,7 +598,7 @@ export default function App() {
           )}
 
           {/* 1-Minute AI Video Timeline Planner */}
-          {currentRoute === 'timeline-planner' && (
+          {currentRoute === 'timeline-planner' && isAuthenticated && (
             <OneMinuteTimelinePlanner
               onOpenEditor={(project) => {
                 StudioApiService.saveProject(project);
@@ -533,7 +610,7 @@ export default function App() {
           )}
 
           {/* Timeline Video Editor */}
-          {currentRoute === 'video-editor' && (
+          {currentRoute === 'video-editor' && isAuthenticated && (
             currentEditingProject ? (
               <VideoEditor
                 project={currentEditingProject}
@@ -565,7 +642,7 @@ export default function App() {
           )}
 
           {/* AI Content & SEO Assistant */}
-          {currentRoute === 'content-assistant' && (
+          {currentRoute === 'content-assistant' && isAuthenticated && (
             <ContentAssistant 
               initialPrompt={assistantPrefill.prompt || initialAssistantPrompt}
               initialTab={assistantPrefill.tab}
@@ -577,7 +654,7 @@ export default function App() {
           )}
 
           {/* Thumbnail Concept Maker */}
-          {currentRoute === 'thumbnail-maker' && (
+          {currentRoute === 'thumbnail-maker' && isAuthenticated && (
             <ThumbnailMaker 
               initialIdea={thumbnailPrefill.idea}
               initialTitle={thumbnailPrefill.title}
@@ -585,7 +662,7 @@ export default function App() {
           )}
 
           {/* My Projects */}
-          {currentRoute === 'projects' && (
+          {currentRoute === 'projects' && isAuthenticated && (
             <ProjectsManager
               projects={projects}
               onOpenProject={handleOpenProjectById}
@@ -598,7 +675,7 @@ export default function App() {
           )}
 
           {/* Templates Library & AI Template Maker */}
-          {currentRoute === 'templates' && (
+          {currentRoute === 'templates' && isAuthenticated && (
             <TemplatesLibrary
               onUseTemplate={handleUseTemplate}
               onProjectCreated={(newProject) => {
@@ -609,7 +686,7 @@ export default function App() {
           )}
 
           {/* Admin Control Center (Server-protected) */}
-          {currentRoute === 'admin' && (
+          {currentRoute === 'admin' && isAuthenticated && (
             <AdminPanel
               onNavigateHome={() => navigateTo('landing')}
               onOpenTemplates={() => navigateTo('templates')}
@@ -617,7 +694,7 @@ export default function App() {
           )}
 
           {/* Music Video Storyboarder */}
-          {currentRoute === 'music-video' && (
+          {currentRoute === 'music-video' && isAuthenticated && (
             <MusicVideoPlanner
               onCreateProject={(project) => {
                 StudioApiService.saveProject(project);
@@ -636,7 +713,7 @@ export default function App() {
           )}
 
           {/* Settings & Workspace Defaults */}
-          {currentRoute === 'settings' && (
+          {currentRoute === 'settings' && isAuthenticated && (
             <div className="max-w-4xl mx-auto space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex items-center gap-3">

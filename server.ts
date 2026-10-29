@@ -28,7 +28,9 @@ async function startServer() {
         req.path.startsWith('/api') ||
         req.path.startsWith('/health') ||
         req.path.startsWith('/status') ||
-        req.path.startsWith('/auth')
+        req.path.startsWith('/auth') ||
+        req.path === '/robots.txt' ||
+        req.path === '/sitemap.xml'
       ) {
         return next();
       }

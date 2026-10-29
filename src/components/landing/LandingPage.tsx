@@ -46,12 +46,12 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   const featureCards = [
     {
       id: 'articles',
-      title: 'AI Creator Guides (30)',
+      title: 'AI Creator Guides (42)',
       subtitle: 'Complete Educational Knowledge Base',
-      description: '30 original, in-depth guides covering scripting, high-CTR titles, thumbnail psychology, Shorts hooks, and SEO in Nepali and English.',
+      description: '42 original, in-depth guides covering scripting, high-CTR titles, thumbnail psychology, Shorts hooks, and SEO in Nepali and English.',
       icon: BookOpen,
       color: 'from-fuchsia-600 to-indigo-600',
-      badge: '30 Guides'
+      badge: '42 Guides'
     },
     {
       id: 'ai-guide',
@@ -461,7 +461,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             onClick={() => onSelectFeature('articles')}
             className="px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-indigo-300 hover:text-white border border-white/10 text-xs font-semibold flex items-center gap-1.5 transition-all self-start md:self-auto cursor-pointer"
           >
-            <span>Explore All 30 Guides</span>
+            <span>Explore All 42 Guides</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
