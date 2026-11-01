@@ -42,6 +42,12 @@ export default function RootLayout({
           content="sFs9iuSCsEjv48AGOVwK1crboQv_h6eg2YQBHUGniwM"
         />
         <meta name="monetag" content="4973b89559305e1198a41cc7845b95cc" />
+        <script
+          src="https://quge5.com/88/tag.min.js"
+          data-zone="304329"
+          async
+          data-cfasync="false"
+        />
       </head>
       <body>{children}</body>
     </html>
