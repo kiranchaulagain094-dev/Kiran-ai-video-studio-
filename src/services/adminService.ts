@@ -449,5 +449,139 @@ export class AdminService {
 
     return data;
   }
+
+  /**
+   * Fetch current Kiran Beats API configuration (credentials masked server-side)
+   */
+  static async getKiranBeatsConfig(): Promise<KiranBeatsConfig> {
+    const res = await fetch('/api/admin/kiran-beats/config', {
+      credentials: 'include'
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Failed to fetch Kiran Beats config (HTTP ${res.status})`);
+    }
+    const data = await res.json();
+    return data;
+  }
+
+  /**
+   * Save Kiran Beats API configuration securely to Neon database
+   */
+  static async saveKiranBeatsConfig(config: {
+    apiKey?: string;
+    baseUrl?: string;
+    authHeaderType?: 'x-api-key' | 'bearer';
+  }): Promise<KiranBeatsConfig> {
+    const res = await fetch('/api/admin/kiran-beats/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(config)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || `Failed to save Kiran Beats configuration (HTTP ${res.status})`);
+    }
+    return data;
+  }
+
+  /**
+   * Probe Kiran Beats API server using strictly the API Key as credential
+   */
+  static async testKiranBeatsConnection(config?: {
+    apiKey?: string;
+    baseUrl?: string;
+    authHeaderType?: 'x-api-key' | 'bearer';
+  }): Promise<KiranBeatsTestResult> {
+    const res = await fetch('/api/admin/kiran-beats/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(config || {})
+    });
+    const data = await res.json().catch(() => ({}));
+    return {
+      success: res.ok && data.success,
+      status: data.status || (res.ok ? 'connected' : 'error'),
+      latencyMs: data.latencyMs,
+      message: data.message,
+      error: data.error
+    };
+  }
+
+  /**
+   * Sync available audio tracks/beats from Kiran Beats catalog
+   */
+  static async syncKiranBeatsData(): Promise<KiranBeatsSyncResult> {
+    const res = await fetch('/api/admin/kiran-beats/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include'
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || data.requirementNotice || `Failed to sync audio data (HTTP ${res.status})`);
+    }
+    return data;
+  }
+
+  /**
+   * Retrieve synced tracks from database
+   */
+  static async getKiranBeatsTracks(): Promise<KiranBeatsTrack[]> {
+    const res = await fetch('/api/admin/kiran-beats/tracks', {
+      credentials: 'include'
+    });
+    if (!res.ok) {
+      return [];
+    }
+    const data = await res.json().catch(() => ({ tracks: [] }));
+    return data.tracks || [];
+  }
+}
+
+export interface KiranBeatsConfig {
+  success?: boolean;
+  configured: boolean;
+  hasApiKey: boolean;
+  maskedApiKey: string;
+  baseUrl: string;
+  authHeaderType: 'x-api-key' | 'bearer';
+  connectionStatus: 'unconfigured' | 'connected' | 'disconnected' | 'error';
+  lastTestedAt: string | null;
+  lastSyncAt: string | null;
+  syncedItemsCount: number;
+  lastError: string | null;
+  lastLatencyMs: number;
+}
+
+export interface KiranBeatsTrack {
+  id: string;
+  title: string;
+  genre: string | null;
+  bpm: number | null;
+  duration_seconds: number | null;
+  audio_url: string;
+  preview_url: string | null;
+  tags: string[];
+  synced_at: string;
+}
+
+export interface KiranBeatsTestResult {
+  success: boolean;
+  status: 'connected' | 'disconnected' | 'error' | 'unconfigured';
+  latencyMs?: number;
+  message?: string;
+  error?: string;
+}
+
+export interface KiranBeatsSyncResult {
+  success: boolean;
+  count: number;
+  message?: string;
+  error?: string;
+  requirementNotice?: string;
+  tracks?: KiranBeatsTrack[];
 }
 

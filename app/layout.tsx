@@ -41,6 +41,7 @@ export default function RootLayout({
           name="google-site-verification"
           content="sFs9iuSCsEjv48AGOVwK1crboQv_h6eg2YQBHUGniwM"
         />
+        <meta name="monetag" content="4973b89559305e1198a41cc7845b95cc" />
       </head>
       <body>{children}</body>
     </html>

@@ -1066,7 +1066,38 @@ export async function ensureUsersSchema(force = false): Promise<void> {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_email_verif_lookup ON email_verifications (LOWER(email), purpose)`,
     `CREATE INDEX IF NOT EXISTS idx_email_verif_expires ON email_verifications (expires_at)`,
-    `CREATE INDEX IF NOT EXISTS idx_users_email_verified ON users (email_verified)`
+    `CREATE INDEX IF NOT EXISTS idx_users_email_verified ON users (email_verified)`,
+
+    // 18. Kiran Beats Platform Integration (Single API Key, Config & Synced Audio Catalog)
+    `CREATE TABLE IF NOT EXISTS kiran_beats_config (
+      id VARCHAR(64) PRIMARY KEY,
+      api_key_encrypted TEXT,
+      api_key_masked VARCHAR(64),
+      base_url VARCHAR(512),
+      auth_header_type VARCHAR(32) DEFAULT 'x-api-key',
+      connection_status VARCHAR(32) DEFAULT 'unconfigured',
+      last_tested_at TIMESTAMPTZ,
+      last_sync_at TIMESTAMPTZ,
+      synced_items_count INTEGER DEFAULT 0,
+      last_error TEXT,
+      last_latency_ms INTEGER DEFAULT 0,
+      metadata JSONB DEFAULT '{}'::jsonb,
+      updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS kiran_beats_tracks (
+      id VARCHAR(128) PRIMARY KEY,
+      title VARCHAR(255) NOT NULL,
+      genre VARCHAR(64),
+      bpm INTEGER,
+      duration_seconds NUMERIC(6,2),
+      audio_url TEXT NOT NULL,
+      preview_url TEXT,
+      tags JSONB DEFAULT '[]'::jsonb,
+      source VARCHAR(64) DEFAULT 'kiran_beats',
+      synced_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_kiran_beats_tracks_bpm ON kiran_beats_tracks (bpm)`,
+    `CREATE INDEX IF NOT EXISTS idx_kiran_beats_tracks_genre ON kiran_beats_tracks (genre)`
   ];
 
   for (const ddl of migrationStatements) {
@@ -4281,6 +4312,594 @@ adminRouter.post(['/test-email', '/api/admin/test-email'], async (req: Request, 
       success: false,
       error: sanitizeError(err)
     });
+  }
+});
+
+// ============================================================================
+// KIRAN BEATS API INTEGRATION (ADMIN PROXIED & SECURE ENCLAVE)
+// - Uses strictly API Key as single credential (no API secret, OAuth, or client ID)
+// - Sensitive credentials stored encrypted in Neon DB & never exposed in client bundles
+// ============================================================================
+
+function getKiranBeatsCipherKey(): Buffer {
+  return crypto.createHash('sha256').update(getSessionSecret() + ':kiran_beats_key_v1').digest();
+}
+
+function encryptKiranBeatsSecret(plaintext: string): string {
+  if (!plaintext) return '';
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', getKiranBeatsCipherKey(), iv);
+  let enc = cipher.update(plaintext, 'utf8', 'hex');
+  enc += cipher.final('hex');
+  const authTag = cipher.getAuthTag().toString('hex');
+  return `${iv.toString('hex')}:${authTag}:${enc}`;
+}
+
+function decryptKiranBeatsSecret(cipherText: string): string {
+  if (!cipherText) return '';
+  try {
+    const parts = cipherText.split(':');
+    if (parts.length !== 3) return '';
+    const iv = Buffer.from(parts[0], 'hex');
+    const authTag = Buffer.from(parts[1], 'hex');
+    const enc = parts[2];
+    const decipher = crypto.createDecipheriv('aes-256-gcm', getKiranBeatsCipherKey(), iv);
+    decipher.setAuthTag(authTag);
+    let dec = decipher.update(enc, 'hex', 'utf8');
+    dec += decipher.final('utf8');
+    return dec;
+  } catch {
+    return '';
+  }
+}
+
+function maskKiranBeatsKey(raw: string): string {
+  if (!raw) return '';
+  const trimmed = raw.trim();
+  if (trimmed.length <= 8) return '••••••••';
+  const prefix = trimmed.slice(0, Math.min(4, Math.floor(trimmed.length / 4)));
+  const suffix = trimmed.slice(-4);
+  return `${prefix}••••••••${suffix}`;
+}
+
+function isSafeExternalUrl(inputUrl: string): { safe: boolean; error?: string; url?: URL } {
+  try {
+    const parsed = new URL(inputUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { safe: false, error: 'URL protocol must be http: or https:' };
+    }
+    const hostname = parsed.hostname.toLowerCase();
+    if (
+      hostname === '169.254.169.254' ||
+      hostname === 'metadata.google.internal' ||
+      hostname === 'metadata'
+    ) {
+      return { safe: false, error: 'Cloud metadata IP access is strictly prohibited.' };
+    }
+    return { safe: true, url: parsed };
+  } catch {
+    return { safe: false, error: 'Invalid URL format. Please include http:// or https://' };
+  }
+}
+
+// In-memory fallback if Neon is starting up or temporarily offline
+let fallbackBeatsConfig = {
+  baseUrl: process.env.KIRAN_BEATS_BASE_URL || '',
+  apiKeyEncrypted: process.env.KIRAN_BEATS_API_KEY ? encryptKiranBeatsSecret(process.env.KIRAN_BEATS_API_KEY) : '',
+  apiKeyMasked: process.env.KIRAN_BEATS_API_KEY ? maskKiranBeatsKey(process.env.KIRAN_BEATS_API_KEY) : '',
+  authHeaderType: 'x-api-key',
+  connectionStatus: process.env.KIRAN_BEATS_API_KEY ? 'unconfigured' : 'unconfigured',
+  lastTestedAt: null as string | null,
+  lastSyncAt: null as string | null,
+  syncedItemsCount: 0,
+  lastError: null as string | null,
+  lastLatencyMs: 0
+};
+
+// 1. Get Kiran Beats API Configuration (Credentials Masked - Never Leaked to Browser)
+adminRouter.get(['/kiran-beats/config', '/api/admin/kiran-beats/config'], async (req: Request, res: Response) => {
+  try {
+    if (isDbConfigured()) {
+      const rows = await query<any>(`SELECT * FROM kiran_beats_config WHERE id = 'primary' LIMIT 1`);
+      if (rows && rows.length > 0) {
+        const row = rows[0];
+        return res.json({
+          success: true,
+          configured: Boolean(row.api_key_masked),
+          hasApiKey: Boolean(row.api_key_encrypted),
+          maskedApiKey: row.api_key_masked || '',
+          baseUrl: row.base_url || '',
+          authHeaderType: row.auth_header_type || 'x-api-key',
+          connectionStatus: row.connection_status || 'unconfigured',
+          lastTestedAt: row.last_tested_at || null,
+          lastSyncAt: row.last_sync_at || null,
+          syncedItemsCount: Number(row.synced_items_count || 0),
+          lastError: row.last_error || null,
+          lastLatencyMs: Number(row.last_latency_ms || 0)
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      configured: Boolean(fallbackBeatsConfig.apiKeyMasked),
+      hasApiKey: Boolean(fallbackBeatsConfig.apiKeyEncrypted),
+      maskedApiKey: fallbackBeatsConfig.apiKeyMasked,
+      baseUrl: fallbackBeatsConfig.baseUrl,
+      authHeaderType: fallbackBeatsConfig.authHeaderType,
+      connectionStatus: fallbackBeatsConfig.connectionStatus,
+      lastTestedAt: fallbackBeatsConfig.lastTestedAt,
+      lastSyncAt: fallbackBeatsConfig.lastSyncAt,
+      syncedItemsCount: fallbackBeatsConfig.syncedItemsCount,
+      lastError: fallbackBeatsConfig.lastError,
+      lastLatencyMs: fallbackBeatsConfig.lastLatencyMs
+    });
+  } catch (err: any) {
+    console.error('Error fetching Kiran Beats config:', err);
+    res.status(500).json({ success: false, error: 'Failed to retrieve Kiran Beats configuration.' });
+  }
+});
+
+// 2. Save Kiran Beats API Configuration (Encrypted Server-Side Storage)
+adminRouter.post(['/kiran-beats/config', '/api/admin/kiran-beats/config'], async (req: Request, res: Response) => {
+  try {
+    const { apiKey, baseUrl, authHeaderType } = req.body || {};
+
+    let existingEncrypted = '';
+    let existingMasked = '';
+
+    if (isDbConfigured()) {
+      const existing = await query<any>(`SELECT api_key_encrypted, api_key_masked FROM kiran_beats_config WHERE id = 'primary' LIMIT 1`);
+      if (existing && existing.length > 0) {
+        existingEncrypted = existing[0].api_key_encrypted || '';
+        existingMasked = existing[0].api_key_masked || '';
+      }
+    } else {
+      existingEncrypted = fallbackBeatsConfig.apiKeyEncrypted;
+      existingMasked = fallbackBeatsConfig.apiKeyMasked;
+    }
+
+    const trimmedKey = typeof apiKey === 'string' ? apiKey.trim() : '';
+    const newEncrypted = trimmedKey ? encryptKiranBeatsSecret(trimmedKey) : existingEncrypted;
+    const newMasked = trimmedKey ? maskKiranBeatsKey(trimmedKey) : existingMasked;
+    const cleanBaseUrl = typeof baseUrl === 'string' ? baseUrl.trim().replace(/\/+$/, '') : '';
+    const headerType = authHeaderType === 'bearer' ? 'bearer' : 'x-api-key';
+
+    if (cleanBaseUrl) {
+      const safety = isSafeExternalUrl(cleanBaseUrl);
+      if (!safety.safe) {
+        return res.status(400).json({ success: false, error: safety.error });
+      }
+    }
+
+    if (isDbConfigured()) {
+      await query(
+        `INSERT INTO kiran_beats_config (
+          id, api_key_encrypted, api_key_masked, base_url, auth_header_type, updated_at
+        ) VALUES (
+          'primary', $1, $2, $3, $4, CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          api_key_encrypted = COALESCE(NULLIF($1, ''), kiran_beats_config.api_key_encrypted),
+          api_key_masked = COALESCE(NULLIF($2, ''), kiran_beats_config.api_key_masked),
+          base_url = $3,
+          auth_header_type = $4,
+          updated_at = CURRENT_TIMESTAMP`,
+        [newEncrypted, newMasked, cleanBaseUrl, headerType]
+      );
+    } else {
+      fallbackBeatsConfig.apiKeyEncrypted = newEncrypted;
+      fallbackBeatsConfig.apiKeyMasked = newMasked;
+      fallbackBeatsConfig.baseUrl = cleanBaseUrl;
+      fallbackBeatsConfig.authHeaderType = headerType;
+    }
+
+    res.json({
+      success: true,
+      message: 'Kiran Beats API configuration saved securely.',
+      configured: Boolean(newMasked),
+      hasApiKey: Boolean(newEncrypted),
+      maskedApiKey: newMasked,
+      baseUrl: cleanBaseUrl,
+      authHeaderType: headerType
+    });
+  } catch (err: any) {
+    console.error('Error saving Kiran Beats config:', err);
+    res.status(500).json({ success: false, error: 'Failed to save Kiran Beats configuration.' });
+  }
+});
+
+// 3. Test API Connection (Single API Key Probe - Zero API Secret Required)
+adminRouter.post(['/kiran-beats/test', '/api/admin/kiran-beats/test'], async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  try {
+    const { apiKey, baseUrl, authHeaderType } = req.body || {};
+
+    let effectiveBaseUrl = typeof baseUrl === 'string' ? baseUrl.trim().replace(/\/+$/, '') : '';
+    let effectiveHeaderType = authHeaderType === 'bearer' ? 'bearer' : 'x-api-key';
+    let rawApiKey = typeof apiKey === 'string' ? apiKey.trim() : '';
+
+    // If key or URL not provided in body, read from database
+    if ((!rawApiKey || !effectiveBaseUrl) && isDbConfigured()) {
+      const rows = await query<any>(`SELECT * FROM kiran_beats_config WHERE id = 'primary' LIMIT 1`);
+      if (rows && rows.length > 0) {
+        if (!effectiveBaseUrl) effectiveBaseUrl = rows[0].base_url || '';
+        if (!authHeaderType) effectiveHeaderType = rows[0].auth_header_type || 'x-api-key';
+        if (!rawApiKey && rows[0].api_key_encrypted) {
+          rawApiKey = decryptKiranBeatsSecret(rows[0].api_key_encrypted);
+        }
+      }
+    }
+
+    if (!rawApiKey && fallbackBeatsConfig.apiKeyEncrypted) {
+      rawApiKey = decryptKiranBeatsSecret(fallbackBeatsConfig.apiKeyEncrypted);
+    }
+    if (!effectiveBaseUrl && fallbackBeatsConfig.baseUrl) {
+      effectiveBaseUrl = fallbackBeatsConfig.baseUrl;
+    }
+
+    if (!effectiveBaseUrl) {
+      return res.status(400).json({
+        success: false,
+        status: 'unconfigured',
+        error: 'Please enter the Kiran Beats API Base URL (e.g. https://api.kiranbeats.com or your deployment URL).'
+      });
+    }
+
+    const safety = isSafeExternalUrl(effectiveBaseUrl);
+    if (!safety.safe) {
+      return res.status(400).json({
+        success: false,
+        status: 'error',
+        error: safety.error
+      });
+    }
+
+    if (!rawApiKey) {
+      return res.status(400).json({
+        success: false,
+        status: 'unconfigured',
+        error: 'Kiran Beats API Key is missing. Please enter your API Key to test the connection.'
+      });
+    }
+
+    // Prepare auth headers using single API Key credential (no API secret or OAuth)
+    const requestHeaders: Record<string, string> = {
+      'Accept': 'application/json',
+      'User-Agent': 'Kiran-AI-Video-Studio-Admin/1.0'
+    };
+
+    if (effectiveHeaderType === 'bearer') {
+      requestHeaders['Authorization'] = `Bearer ${rawApiKey}`;
+    } else {
+      requestHeaders['X-API-Key'] = rawApiKey;
+      // Also send Authorization header as fallback compatibility
+      requestHeaders['Authorization'] = `Bearer ${rawApiKey}`;
+    }
+
+    // Probe order: /api/v1/health -> /health -> /status -> base URL
+    const probeEndpoints = [
+      `${effectiveBaseUrl}/api/v1/health`,
+      `${effectiveBaseUrl}/health`,
+      `${effectiveBaseUrl}/status`,
+      effectiveBaseUrl
+    ];
+
+    let probeResult: { ok: boolean; status: number; text: string; endpoint: string } | null = null;
+    let lastNetworkError: any = null;
+
+    for (const targetUrl of probeEndpoints) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6500);
+
+        const response = await fetch(targetUrl, {
+          method: 'GET',
+          headers: requestHeaders,
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        const text = await response.text().catch(() => '');
+        probeResult = {
+          ok: response.ok,
+          status: response.status,
+          text: text.slice(0, 300),
+          endpoint: targetUrl
+        };
+
+        // If we received an explicit auth success or auth failure, don't need to try remaining probe endpoints
+        if (response.status === 200 || response.status === 204 || response.status === 401 || response.status === 403) {
+          break;
+        }
+      } catch (err: any) {
+        lastNetworkError = err;
+      }
+    }
+
+    const latencyMs = Math.max(1, Date.now() - startTime);
+
+    if (probeResult) {
+      if (probeResult.ok) {
+        // Successful connection
+        if (isDbConfigured()) {
+          await query(
+            `UPDATE kiran_beats_config SET
+              connection_status = 'connected',
+              last_tested_at = CURRENT_TIMESTAMP,
+              last_latency_ms = $1,
+              last_error = NULL
+            WHERE id = 'primary'`,
+            [latencyMs]
+          );
+        }
+        return res.json({
+          success: true,
+          status: 'connected',
+          latencyMs,
+          message: `Successfully connected to Kiran Beats API (${latencyMs}ms roundtrip). Endpoint verified: ${probeResult.endpoint}`,
+          httpStatus: probeResult.status
+        });
+      }
+
+      if (probeResult.status === 401 || probeResult.status === 403) {
+        const errMsg = `Kiran Beats API rejected the API Key (HTTP ${probeResult.status}). Please check that the key matches your active Kiran Beats account.`;
+        if (isDbConfigured()) {
+          await query(
+            `UPDATE kiran_beats_config SET
+              connection_status = 'error',
+              last_tested_at = CURRENT_TIMESTAMP,
+              last_latency_ms = $1,
+              last_error = $2
+            WHERE id = 'primary'`,
+            [latencyMs, errMsg]
+          );
+        }
+        return res.status(401).json({
+          success: false,
+          status: 'error',
+          latencyMs,
+          httpStatus: probeResult.status,
+          error: errMsg
+        });
+      }
+
+      if (probeResult.status === 404) {
+        const errMsg = `Server at ${effectiveBaseUrl} was reached, but no API health route was found (HTTP 404). Kiran Beats backend requires endpoint deployment (/api/v1/health, /api/v1/tracks).`;
+        if (isDbConfigured()) {
+          await query(
+            `UPDATE kiran_beats_config SET
+              connection_status = 'error',
+              last_tested_at = CURRENT_TIMESTAMP,
+              last_latency_ms = $1,
+              last_error = $2
+            WHERE id = 'primary'`,
+            [latencyMs, errMsg]
+          );
+        }
+        return res.status(404).json({
+          success: false,
+          status: 'error',
+          latencyMs,
+          httpStatus: probeResult.status,
+          error: errMsg
+        });
+      }
+
+      const errMsg = `Kiran Beats API returned unexpected status HTTP ${probeResult.status}: ${probeResult.text || 'No response body'}`;
+      if (isDbConfigured()) {
+        await query(
+          `UPDATE kiran_beats_config SET
+            connection_status = 'error',
+            last_tested_at = CURRENT_TIMESTAMP,
+            last_latency_ms = $1,
+            last_error = $2
+          WHERE id = 'primary'`,
+          [latencyMs, errMsg]
+        );
+      }
+      return res.status(502).json({
+        success: false,
+        status: 'error',
+        latencyMs,
+        httpStatus: probeResult.status,
+        error: errMsg
+      });
+    }
+
+    // Network / DNS / timeout error
+    const netErrMsg = lastNetworkError?.name === 'AbortError'
+      ? `Connection timed out after 6.5s while trying to reach ${effectiveBaseUrl}. Check server health.`
+      : `Failed to connect to ${effectiveBaseUrl}: ${lastNetworkError?.message || 'Host unreachable'}`;
+
+    if (isDbConfigured()) {
+      await query(
+        `UPDATE kiran_beats_config SET
+          connection_status = 'disconnected',
+          last_tested_at = CURRENT_TIMESTAMP,
+          last_latency_ms = $1,
+          last_error = $2
+        WHERE id = 'primary'`,
+        [latencyMs, netErrMsg]
+      );
+    }
+
+    res.status(503).json({
+      success: false,
+      status: 'disconnected',
+      latencyMs,
+      error: netErrMsg
+    });
+  } catch (err: any) {
+    console.error('Kiran Beats test error:', err);
+    res.status(500).json({
+      success: false,
+      status: 'error',
+      latencyMs: Date.now() - startTime,
+      error: sanitizeError(err)
+    });
+  }
+});
+
+// 4. Sync Available Data from Kiran Beats (Catalog of Beats / Audio Tracks)
+adminRouter.post(['/kiran-beats/sync', '/api/admin/kiran-beats/sync'], async (req: Request, res: Response) => {
+  try {
+    let effectiveBaseUrl = '';
+    let rawApiKey = '';
+    let effectiveHeaderType = 'x-api-key';
+
+    if (isDbConfigured()) {
+      const rows = await query<any>(`SELECT * FROM kiran_beats_config WHERE id = 'primary' LIMIT 1`);
+      if (rows && rows.length > 0) {
+        effectiveBaseUrl = rows[0].base_url || '';
+        effectiveHeaderType = rows[0].auth_header_type || 'x-api-key';
+        if (rows[0].api_key_encrypted) {
+          rawApiKey = decryptKiranBeatsSecret(rows[0].api_key_encrypted);
+        }
+      }
+    }
+
+    if (!rawApiKey && fallbackBeatsConfig.apiKeyEncrypted) {
+      rawApiKey = decryptKiranBeatsSecret(fallbackBeatsConfig.apiKeyEncrypted);
+    }
+    if (!effectiveBaseUrl && fallbackBeatsConfig.baseUrl) {
+      effectiveBaseUrl = fallbackBeatsConfig.baseUrl;
+    }
+
+    if (!effectiveBaseUrl || !rawApiKey) {
+      return res.status(400).json({
+        success: false,
+        error: 'Kiran Beats API is not configured yet. Please enter your API Key and Base URL and click "Save Configuration".'
+      });
+    }
+
+    const requestHeaders: Record<string, string> = {
+      'Accept': 'application/json',
+      'User-Agent': 'Kiran-AI-Video-Studio-Admin/1.0'
+    };
+    if (effectiveHeaderType === 'bearer') {
+      requestHeaders['Authorization'] = `Bearer ${rawApiKey}`;
+    } else {
+      requestHeaders['X-API-Key'] = rawApiKey;
+      requestHeaders['Authorization'] = `Bearer ${rawApiKey}`;
+    }
+
+    // Query /api/v1/tracks or /tracks from Kiran Beats platform
+    const catalogUrls = [
+      `${effectiveBaseUrl.replace(/\/+$/, '')}/api/v1/tracks`,
+      `${effectiveBaseUrl.replace(/\/+$/, '')}/tracks`
+    ];
+
+    let catalogData: any = null;
+    let fetchError: any = null;
+
+    for (const catUrl of catalogUrls) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        const resTracks = await fetch(catUrl, {
+          method: 'GET',
+          headers: requestHeaders,
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (resTracks.ok) {
+          catalogData = await resTracks.json();
+          break;
+        } else if (resTracks.status === 404) {
+          fetchError = 'Endpoint /api/v1/tracks returned 404 Not Found. The catalog API has not yet been deployed on the Kiran Beats backend.';
+        } else {
+          fetchError = `Kiran Beats API returned HTTP ${resTracks.status} during tracks synchronization.`;
+        }
+      } catch (err: any) {
+        fetchError = err.message;
+      }
+    }
+
+    if (!catalogData) {
+      return res.status(404).json({
+        success: false,
+        error: fetchError || 'Unable to sync tracks from Kiran Beats.',
+        requirementNotice: 'Kiran Beats platform generates API keys, but does not yet host a GET /api/v1/tracks endpoint. Deploy the tracks endpoint on Kiran Beats to enable automated catalog synchronization.'
+      });
+    }
+
+    const rawList = Array.isArray(catalogData)
+      ? catalogData
+      : (Array.isArray(catalogData.tracks) ? catalogData.tracks : (Array.isArray(catalogData.data) ? catalogData.data : []));
+
+    let upsertCount = 0;
+    if (isDbConfigured() && rawList.length > 0) {
+      for (const item of rawList) {
+        const trackId = String(item.id || item.track_id || `kb_${crypto.randomBytes(6).toString('hex')}`);
+        const title = String(item.title || item.name || 'Untitled Beat');
+        const genre = item.genre ? String(item.genre) : null;
+        const bpm = typeof item.bpm === 'number' ? item.bpm : (parseInt(item.bpm, 10) || null);
+        const durationSeconds = typeof item.duration_seconds === 'number'
+          ? item.duration_seconds
+          : (parseFloat(item.duration) || null);
+        const audioUrl = String(item.audio_url || item.url || item.stream_url || '');
+        const previewUrl = item.preview_url ? String(item.preview_url) : null;
+        const tags = JSON.stringify(Array.isArray(item.tags) ? item.tags : []);
+
+        if (audioUrl) {
+          await query(
+            `INSERT INTO kiran_beats_tracks (
+              id, title, genre, bpm, duration_seconds, audio_url, preview_url, tags, source, synced_at
+            ) VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8::jsonb, 'kiran_beats', CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (id) DO UPDATE SET
+              title = EXCLUDED.title,
+              genre = EXCLUDED.genre,
+              bpm = EXCLUDED.bpm,
+              duration_seconds = EXCLUDED.duration_seconds,
+              audio_url = EXCLUDED.audio_url,
+              preview_url = EXCLUDED.preview_url,
+              tags = EXCLUDED.tags,
+              synced_at = CURRENT_TIMESTAMP`,
+            [trackId, title, genre, bpm, durationSeconds, audioUrl, previewUrl, tags]
+          );
+          upsertCount++;
+        }
+      }
+
+      await query(
+        `UPDATE kiran_beats_config SET
+          synced_items_count = $1,
+          last_sync_at = CURRENT_TIMESTAMP,
+          connection_status = 'connected',
+          last_error = NULL
+        WHERE id = 'primary'`,
+        [upsertCount]
+      );
+    }
+
+    res.json({
+      success: true,
+      count: upsertCount,
+      message: `Synchronized ${upsertCount} audio beats from Kiran Beats platform.`
+    });
+  } catch (err: any) {
+    console.error('Kiran Beats sync error:', err);
+    res.status(500).json({ success: false, error: sanitizeError(err) });
+  }
+});
+
+// 5. Get Synced Kiran Beats Tracks for Admin Review & Playback
+adminRouter.get(['/kiran-beats/tracks', '/api/admin/kiran-beats/tracks'], async (req: Request, res: Response) => {
+  try {
+    if (isDbConfigured()) {
+      const tracks = await query<any>(
+        `SELECT * FROM kiran_beats_tracks ORDER BY synced_at DESC LIMIT 50`
+      );
+      return res.json({ success: true, tracks: tracks || [] });
+    }
+    res.json({ success: true, tracks: [] });
+  } catch (err: any) {
+    console.error('Error fetching synced beats tracks:', err);
+    res.status(500).json({ success: false, error: 'Failed to retrieve synced tracks.' });
   }
 });
 

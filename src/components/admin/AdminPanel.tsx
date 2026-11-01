@@ -34,10 +34,28 @@ import {
   Rocket,
   Send,
   Filter,
-  Mail
+  Mail,
+  Music,
+  Radio,
+  Disc,
+  Volume2,
+  Play,
+  Pause,
+  Sliders,
+  Key,
+  Copy,
+  Code2
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { AdminService, AdminStats, AdminUser, AdminActivity } from '../../services/adminService';
+import { 
+  AdminService, 
+  AdminStats, 
+  AdminUser, 
+  AdminActivity,
+  KiranBeatsConfig,
+  KiranBeatsTrack,
+  KiranBeatsTestResult
+} from '../../services/adminService';
 import { DbTemplate, StudioUpdate, TemplateSlotMetadata } from '../../types';
 
 interface AdminPanelProps {
@@ -45,7 +63,7 @@ interface AdminPanelProps {
   onOpenTemplates: () => void;
 }
 
-type AdminTab = 'dashboard' | 'users' | 'templates' | 'updates' | 'system';
+type AdminTab = 'dashboard' | 'users' | 'templates' | 'updates' | 'system' | 'kiran-beats';
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({ onNavigateHome, onOpenTemplates }) => {
   const { user, isAuthenticated } = useAuth();
@@ -124,6 +142,112 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onNavigateHome, onOpenTe
       showError(err?.message || 'Failed to send test email.');
     } finally {
       setIsSendingTestEmail(false);
+    }
+  };
+
+  // Kiran Beats API Management (Requirement: Single API Key authentication, no secret, secure server enclave)
+  const [beatsConfig, setBeatsConfig] = useState<KiranBeatsConfig | null>(null);
+  const [beatsApiKeyInput, setBeatsApiKeyInput] = useState<string>('');
+  const [beatsBaseUrlInput, setBeatsBaseUrlInput] = useState<string>('');
+  const [beatsAuthHeaderType, setBeatsAuthHeaderType] = useState<'x-api-key' | 'bearer'>('x-api-key');
+  const [beatsShowKey, setBeatsShowKey] = useState<boolean>(false);
+  const [isLoadingBeatsConfig, setIsLoadingBeatsConfig] = useState<boolean>(false);
+  const [isSavingBeatsConfig, setIsSavingBeatsConfig] = useState<boolean>(false);
+  const [isTestingBeatsConnection, setIsTestingBeatsConnection] = useState<boolean>(false);
+  const [isSyncingBeatsData, setIsSyncingBeatsData] = useState<boolean>(false);
+  const [beatsTestResult, setBeatsTestResult] = useState<KiranBeatsTestResult | null>(null);
+  const [beatsSyncMessage, setBeatsSyncMessage] = useState<{ success: boolean; text: string } | null>(null);
+  const [beatsTracks, setBeatsTracks] = useState<KiranBeatsTrack[]>([]);
+  const [activeAudioPlaying, setActiveAudioPlaying] = useState<string | null>(null);
+  const [showSpecGuide, setShowSpecGuide] = useState<boolean>(false);
+  const [copiedSpec, setCopiedSpec] = useState<boolean>(false);
+
+  const loadBeatsConfig = async () => {
+    setIsLoadingBeatsConfig(true);
+    try {
+      const cfg = await AdminService.getKiranBeatsConfig();
+      setBeatsConfig(cfg);
+      setBeatsBaseUrlInput(cfg.baseUrl || '');
+      setBeatsAuthHeaderType(cfg.authHeaderType || 'x-api-key');
+      const tracks = await AdminService.getKiranBeatsTracks();
+      setBeatsTracks(tracks);
+    } catch (err: any) {
+      console.error('Failed to load Kiran Beats config:', err);
+    } finally {
+      setIsLoadingBeatsConfig(false);
+    }
+  };
+
+  const handleSaveBeatsConfig = async () => {
+    setIsSavingBeatsConfig(true);
+    try {
+      const updated = await AdminService.saveKiranBeatsConfig({
+        apiKey: beatsApiKeyInput.trim() || undefined,
+        baseUrl: beatsBaseUrlInput.trim(),
+        authHeaderType: beatsAuthHeaderType
+      });
+      setBeatsConfig(updated);
+      setBeatsApiKeyInput(''); // Clear input for security
+      showFeedback('Kiran Beats configuration saved securely in Neon database.');
+    } catch (err: any) {
+      showError(err?.message || 'Failed to save Kiran Beats configuration.');
+    } finally {
+      setIsSavingBeatsConfig(false);
+    }
+  };
+
+  const handleTestBeatsConnection = async () => {
+    setIsTestingBeatsConnection(true);
+    setBeatsTestResult(null);
+    try {
+      const res = await AdminService.testKiranBeatsConnection({
+        apiKey: beatsApiKeyInput.trim() || undefined,
+        baseUrl: beatsBaseUrlInput.trim() || undefined,
+        authHeaderType: beatsAuthHeaderType
+      });
+      setBeatsTestResult(res);
+      if (res.success) {
+        showFeedback(res.message || 'Kiran Beats API connected successfully!');
+      } else {
+        showError(res.error || 'Connection probe failed.');
+      }
+      const cfg = await AdminService.getKiranBeatsConfig();
+      setBeatsConfig(cfg);
+    } catch (err: any) {
+      const failResult: KiranBeatsTestResult = {
+        success: false,
+        status: 'error',
+        error: err?.message || 'Connection test failed.'
+      };
+      setBeatsTestResult(failResult);
+      showError(err?.message || 'Connection test failed.');
+    } finally {
+      setIsTestingBeatsConnection(false);
+    }
+  };
+
+  const handleSyncBeatsData = async () => {
+    setIsSyncingBeatsData(true);
+    setBeatsSyncMessage(null);
+    try {
+      const res = await AdminService.syncKiranBeatsData();
+      setBeatsSyncMessage({
+        success: true,
+        text: `Successfully synced ${res.count} beats from Kiran Beats!`
+      });
+      showFeedback(`Synced ${res.count} audio beats.`);
+      const tracks = await AdminService.getKiranBeatsTracks();
+      setBeatsTracks(tracks);
+      const cfg = await AdminService.getKiranBeatsConfig();
+      setBeatsConfig(cfg);
+    } catch (err: any) {
+      setBeatsSyncMessage({
+        success: false,
+        text: err?.message || 'Failed to sync data from Kiran Beats.'
+      });
+      showError(err?.message || 'Failed to sync data from Kiran Beats.');
+    } finally {
+      setIsSyncingBeatsData(false);
     }
   };
 
@@ -210,6 +334,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onNavigateHome, onOpenTe
       loadUsers();
       loadTemplates();
       loadUpdates();
+      loadBeatsConfig();
     }
   }, [isAdmin]);
 
@@ -274,6 +399,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onNavigateHome, onOpenTe
               if (activeTab === 'users') loadUsers(searchUserQuery);
               if (activeTab === 'templates') loadTemplates();
               if (activeTab === 'updates') loadUpdates();
+              if (activeTab === 'kiran-beats') loadBeatsConfig();
               showFeedback('Refreshed administrative data');
             }}
             className="p-2.5 rounded-xl bg-[#121622] hover:bg-[#1a2030] text-slate-300 hover:text-white border border-white/10 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
@@ -348,6 +474,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onNavigateHome, onOpenTe
         >
           <Rocket className="w-4 h-4" />
           <span>Release Dashboard</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab('kiran-beats');
+            loadBeatsConfig();
+          }}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'kiran-beats'
+              ? 'bg-gradient-to-r from-amber-500 via-rose-500 to-purple-600 text-white shadow-md'
+              : 'text-slate-400 hover:text-white hover:bg-white/5'
+          }`}
+        >
+          <Music className="w-4 h-4" />
+          <span>Kiran Beats API</span>
+          {beatsConfig?.connectionStatus === 'connected' ? (
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse ml-0.5" title="Connected" />
+          ) : beatsConfig?.configured ? (
+            <span className="w-2 h-2 rounded-full bg-amber-400 ml-0.5" title="Configured" />
+          ) : null}
         </button>
 
         <button
@@ -2137,6 +2283,587 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ onNavigateHome, onOpenTe
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 6: KIRAN BEATS API SETTINGS */}
+      {activeTab === 'kiran-beats' && (
+        <div className="space-y-8 animate-fadeIn">
+          {/* Top Header Card */}
+          <div className="p-6 rounded-3xl bg-gradient-to-r from-[#121622] via-[#1a1b2e] to-[#121622] border border-amber-500/20 shadow-xl relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-96 h-96 bg-amber-500/5 rounded-full blur-3xl -mr-20 -mt-20 pointer-events-none" />
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
+              <div className="space-y-2 max-w-2xl">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-[11px] font-semibold">
+                  <Music className="w-3.5 h-3.5" />
+                  <span>Kiran Beats Audio Ecosystem</span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                  <span className="text-slate-400 font-normal">Single API Key Authentication</span>
+                </div>
+                <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+                  Kiran Beats API Integration &amp; Audio Catalog
+                </h2>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Connect your Kiran Beats music generation platform to Kiran AI Video Studio. The official integration requires <span className="text-amber-300 font-medium">only an API Key</span> (no API Secret, OAuth client ID, or signing keys). All credentials remain encrypted server-side in Neon PostgreSQL and are never exposed in browser bundles.
+                </p>
+              </div>
+
+              {/* Status Badge Card */}
+              <div className="p-4 rounded-2xl bg-[#0d1017] border border-white/10 shrink-0 space-y-2 min-w-[220px]">
+                <div className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">Live Platform Status</div>
+                <div className="flex items-center gap-2">
+                  {beatsConfig?.connectionStatus === 'connected' ? (
+                    <>
+                      <span className="w-3 h-3 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className="text-sm font-bold text-emerald-300">Connected &amp; Active</span>
+                    </>
+                  ) : beatsConfig?.connectionStatus === 'error' ? (
+                    <>
+                      <span className="w-3 h-3 rounded-full bg-rose-500" />
+                      <span className="text-sm font-bold text-rose-300">Connection Error</span>
+                    </>
+                  ) : beatsConfig?.connectionStatus === 'disconnected' ? (
+                    <>
+                      <span className="w-3 h-3 rounded-full bg-amber-500" />
+                      <span className="text-sm font-bold text-amber-300">Host Unreachable</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="w-3 h-3 rounded-full bg-slate-500" />
+                      <span className="text-sm font-bold text-slate-300">Unconfigured</span>
+                    </>
+                  )}
+                </div>
+                <div className="text-[11px] text-slate-400 font-mono">
+                  {beatsConfig?.lastLatencyMs ? `${beatsConfig.lastLatencyMs}ms ping` : 'No probe latency'}
+                  {beatsConfig?.lastTestedAt && (
+                    <span className="text-slate-500 block text-[10px]">
+                      Tested: {new Date(beatsConfig.lastTestedAt).toLocaleTimeString()}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Metrics Bar */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+            <div className="p-4 rounded-2xl bg-[#121622] border border-white/5 space-y-1">
+              <span className="text-[11px] text-slate-400 font-medium">Credential Type</span>
+              <div className="text-base font-bold text-amber-300 flex items-center gap-1.5">
+                <Key className="w-4 h-4 text-amber-400" />
+                <span>API Key Only</span>
+              </div>
+              <div className="text-[10px] text-slate-500">Zero Secret Required</div>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-[#121622] border border-white/5 space-y-1">
+              <span className="text-[11px] text-slate-400 font-medium">Storage Enclave</span>
+              <div className="text-base font-bold text-emerald-400 flex items-center gap-1.5">
+                <Lock className="w-4 h-4 text-emerald-400" />
+                <span>AES-256-GCM</span>
+              </div>
+              <div className="text-[10px] text-slate-500">Neon PostgreSQL DB</div>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-[#121622] border border-white/5 space-y-1">
+              <span className="text-[11px] text-slate-400 font-medium">Synced Beats</span>
+              <div className="text-base font-bold text-cyan-300 flex items-center gap-1.5">
+                <Music className="w-4 h-4 text-cyan-400" />
+                <span>{beatsTracks.length || beatsConfig?.syncedItemsCount || 0} Tracks</span>
+              </div>
+              <div className="text-[10px] text-slate-500">Ready for Video Maker</div>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-[#121622] border border-white/5 space-y-1">
+              <span className="text-[11px] text-slate-400 font-medium">Header Method</span>
+              <div className="text-base font-bold text-violet-300 flex items-center gap-1.5">
+                <Sliders className="w-4 h-4 text-violet-400" />
+                <span>{beatsAuthHeaderType === 'bearer' ? 'Bearer Token' : 'X-API-Key'}</span>
+              </div>
+              <div className="text-[10px] text-slate-500">Standard HTTP header</div>
+            </div>
+          </div>
+
+          {/* Main Configuration Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Left 2 Cols: Form & Actions */}
+            <div className="lg:col-span-2 space-y-6">
+              <div className="p-6 rounded-3xl bg-[#121622] border border-white/10 space-y-6 shadow-xl">
+                <div className="flex items-center justify-between pb-4 border-b border-white/5">
+                  <div className="flex items-center gap-2">
+                    <Sliders className="w-4 h-4 text-amber-400" />
+                    <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                      API Credentials &amp; Endpoint Settings
+                    </h3>
+                  </div>
+                  <span className="text-[11px] text-slate-500 font-mono">Server Enclave</span>
+                </div>
+
+                <div className="space-y-4">
+                  {/* API Key Input */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                        <Key className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Kiran Beats API Key</span>
+                        <span className="text-rose-400">*</span>
+                      </label>
+                      {beatsConfig?.hasApiKey && (
+                        <span className="text-[10px] text-emerald-400 font-mono bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/20">
+                          Active key: {beatsConfig.maskedApiKey}
+                        </span>
+                      )}
+                    </div>
+                    <div className="relative">
+                      <input
+                        type={beatsShowKey ? 'text' : 'password'}
+                        value={beatsApiKeyInput}
+                        onChange={(e) => setBeatsApiKeyInput(e.target.value)}
+                        placeholder={
+                          beatsConfig?.hasApiKey
+                            ? '•••••••••••••••• (Leave blank to keep existing key)'
+                            : 'Enter your Kiran Beats API Key (e.g. kb_live_...)'
+                        }
+                        className="w-full pl-3.5 pr-10 py-2.5 rounded-xl bg-[#0e111a] border border-white/10 focus:border-amber-400/60 focus:ring-1 focus:ring-amber-400/60 text-white text-xs font-mono placeholder:text-slate-500 outline-none transition-all"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setBeatsShowKey(!beatsShowKey)}
+                        className="absolute right-3 top-2.5 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                        title={beatsShowKey ? 'Hide key' : 'Show key'}
+                      >
+                        {beatsShowKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Your platform issues an API Key. No secondary API Secret or OAuth credentials are required. Key is encrypted with AES-256-GCM before saving to Neon PostgreSQL.
+                    </p>
+                  </div>
+
+                  {/* API Base URL Input */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>API Base URL</span>
+                      <span className="text-slate-500 font-normal">(Configurable Domain)</span>
+                    </label>
+                    <input
+                      type="url"
+                      value={beatsBaseUrlInput}
+                      onChange={(e) => setBeatsBaseUrlInput(e.target.value)}
+                      placeholder="https://api.kiranbeats.com (or your custom staging/production URL)"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-[#0e111a] border border-white/10 focus:border-cyan-400/60 focus:ring-1 focus:ring-cyan-400/60 text-white text-xs font-mono placeholder:text-slate-500 outline-none transition-all"
+                    />
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Enter the root URL where your Kiran Beats backend is deployed. We do not hardcode invented endpoints—you have full control over the target host.
+                    </p>
+                  </div>
+
+                  {/* Authentication Header Protocol */}
+                  <div className="space-y-1.5 pt-1">
+                    <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                      <Sliders className="w-3.5 h-3.5 text-violet-400" />
+                      <span>Header Authentication Format</span>
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setBeatsAuthHeaderType('x-api-key')}
+                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                          beatsAuthHeaderType === 'x-api-key'
+                            ? 'bg-amber-500/10 border-amber-500/40 text-white shadow-sm'
+                            : 'bg-[#0e111a] border-white/5 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <div className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                          <span>X-API-Key</span>
+                          <span className="text-[9px] bg-amber-500/20 px-1.5 py-0.2 rounded text-amber-200 uppercase font-mono">Recommended</span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-1 font-mono">X-API-Key: &lt;API_KEY&gt;</div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setBeatsAuthHeaderType('bearer')}
+                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                          beatsAuthHeaderType === 'bearer'
+                            ? 'bg-cyan-500/10 border-cyan-500/40 text-white shadow-sm'
+                            : 'bg-[#0e111a] border-white/5 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <div className="text-xs font-bold text-cyan-300">Authorization Bearer</div>
+                        <div className="text-[11px] text-slate-400 mt-1 font-mono">Authorization: Bearer &lt;API_KEY&gt;</div>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Action Buttons Row */}
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-white/5">
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={handleSaveBeatsConfig}
+                      disabled={isSavingBeatsConfig}
+                      className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-rose-500 hover:from-amber-600 hover:to-rose-600 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-2 shadow-lg transition-all cursor-pointer"
+                    >
+                      {isSavingBeatsConfig ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>Saving Encrypted...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Save Configuration</span>
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleTestBeatsConnection}
+                      disabled={isTestingBeatsConnection}
+                      className="px-4 py-2.5 rounded-xl bg-[#171c2b] hover:bg-[#1f253a] disabled:opacity-50 text-slate-200 hover:text-white text-xs font-semibold border border-white/10 flex items-center gap-2 transition-all cursor-pointer"
+                    >
+                      {isTestingBeatsConnection ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                          <span>Probing Endpoint...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Radio className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>Test API Connection</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleSyncBeatsData}
+                    disabled={isSyncingBeatsData || (!beatsConfig?.configured && !beatsApiKeyInput)}
+                    className="px-4 py-2.5 rounded-xl bg-cyan-600/20 hover:bg-cyan-600/30 disabled:opacity-40 text-cyan-300 text-xs font-semibold border border-cyan-500/30 flex items-center gap-2 transition-all cursor-pointer"
+                  >
+                    {isSyncingBeatsData ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Syncing Catalog...</span>
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span>Sync Available Data</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Test Connection Result Box */}
+                {beatsTestResult && (
+                  <div
+                    className={`p-4 rounded-2xl border text-xs space-y-1.5 transition-all ${
+                      beatsTestResult.success
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
+                        : beatsTestResult.status === 'unconfigured'
+                        ? 'bg-amber-500/10 border-amber-500/30 text-amber-200'
+                        : 'bg-rose-500/10 border-rose-500/30 text-rose-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between font-bold">
+                      <div className="flex items-center gap-2">
+                        {beatsTestResult.success ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                        ) : (
+                          <AlertCircle className="w-4 h-4 text-rose-400" />
+                        )}
+                        <span>
+                          {beatsTestResult.success
+                            ? 'Connection Succeeded'
+                            : beatsTestResult.status === 'unconfigured'
+                            ? 'Setup Required'
+                            : 'Connection Diagnostic Report'}
+                        </span>
+                      </div>
+                      {beatsTestResult.latencyMs && (
+                        <span className="font-mono text-[10px] opacity-80">
+                          Latency: {beatsTestResult.latencyMs}ms
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] leading-relaxed opacity-90 pl-6">
+                      {beatsTestResult.message || beatsTestResult.error}
+                    </p>
+                  </div>
+                )}
+
+                {/* Sync Result Box */}
+                {beatsSyncMessage && (
+                  <div
+                    className={`p-4 rounded-2xl border text-xs space-y-1 ${
+                      beatsSyncMessage.success
+                        ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-200'
+                        : 'bg-rose-500/10 border-rose-500/30 text-rose-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 font-bold">
+                      {beatsSyncMessage.success ? (
+                        <CheckCircle2 className="w-4 h-4 text-cyan-400" />
+                      ) : (
+                        <AlertTriangle className="w-4 h-4 text-rose-400" />
+                      )}
+                      <span>Catalog Synchronization</span>
+                    </div>
+                    <p className="text-[11px] leading-relaxed opacity-90 pl-6">
+                      {beatsSyncMessage.text}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Right Col: Security Card & Backend Implementation Guide */}
+            <div className="space-y-6">
+              {/* Security Enclave Card */}
+              <div className="p-5 rounded-3xl bg-[#121622] border border-white/10 space-y-3.5">
+                <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs uppercase tracking-wider">
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Security &amp; Isolation Architecture</span>
+                </div>
+                <div className="space-y-2 text-xs text-slate-300">
+                  <div className="flex items-start gap-2">
+                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                    <span><strong className="text-white">Single Credential:</strong> Strictly uses the API Key. No API Secret or OAuth required.</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                    <span><strong className="text-white">Server Enclave:</strong> Raw API Key is never sent in frontend JavaScript bundles or API GET responses.</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                    <span><strong className="text-white">Anti-SSRF Protection:</strong> Internal loopbacks and cloud metadata endpoints are strictly blocked.</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                    <span><strong className="text-white">Neon PostgreSQL:</strong> Encrypted with AES-256-GCM using unique per-instance derivation.</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Developer Spec Guide Toggle */}
+              <div className="p-5 rounded-3xl bg-[#121622] border border-amber-500/20 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-amber-300 font-bold text-xs uppercase tracking-wider">
+                    <Code2 className="w-4 h-4 text-amber-400" />
+                    <span>Kiran Beats Backend Specification</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowSpecGuide(!showSpecGuide)}
+                    className="text-[10px] text-amber-400 hover:text-amber-300 font-semibold cursor-pointer underline"
+                  >
+                    {showSpecGuide ? 'Hide Spec' : 'View Spec'}
+                  </button>
+                </div>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  If your Kiran Beats platform currently generates API Keys but does not have REST API endpoints yet, here is the exact specification to deploy on Kiran Beats for end-to-end synchronization.
+                </p>
+
+                {showSpecGuide && (
+                  <div className="space-y-3 pt-2 text-xs">
+                    <div className="p-3 rounded-xl bg-black/40 border border-white/5 space-y-1 font-mono text-[11px]">
+                      <div className="text-cyan-400 font-bold">1. Health Probe Endpoint:</div>
+                      <div className="text-slate-300">GET /api/v1/health</div>
+                      <div className="text-slate-500 text-[10px]">Headers: X-API-Key: &lt;key&gt;</div>
+                      <div className="text-emerald-400 text-[10px]">Returns: 200 OK &#123; "status": "ok" &#125;</div>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-black/40 border border-white/5 space-y-1 font-mono text-[11px]">
+                      <div className="text-cyan-400 font-bold">2. Tracks Catalog Endpoint:</div>
+                      <div className="text-slate-300">GET /api/v1/tracks</div>
+                      <div className="text-slate-500 text-[10px]">Headers: X-API-Key: &lt;key&gt;</div>
+                      <div className="text-emerald-400 text-[10px]">
+                        Returns: &#123; "tracks": [ &#123; "id": "kb_1", "title": "Phonk Beat", "genre": "Phonk", "bpm": 140, "audio_url": "https://..." &#125; ] &#125;
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const snippet = `// Sample Express.js route for Kiran Beats backend:
+app.get('/api/v1/health', (req, res) => {
+  const apiKey = req.headers['x-api-key'] || (req.headers.authorization || '').replace('Bearer ', '');
+  if (!apiKey || apiKey !== process.env.KIRAN_BEATS_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized: Invalid API Key' });
+  }
+  res.json({ status: 'ok', service: 'Kiran Beats API', timestamp: new Date().toISOString() });
+});
+
+app.get('/api/v1/tracks', (req, res) => {
+  const apiKey = req.headers['x-api-key'] || (req.headers.authorization || '').replace('Bearer ', '');
+  if (!apiKey || apiKey !== process.env.KIRAN_BEATS_API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized: Invalid API Key' });
+  }
+  res.json({
+    tracks: [
+      { id: 'kb_01', title: 'Kathmandu Drill Trap', genre: 'Trap', bpm: 142, duration_seconds: 30, audio_url: 'https://cdn.kiranbeats.com/audio/kb_01.mp3' },
+      { id: 'kb_02', title: 'Himalayan Cinematic Wave', genre: 'Cinematic', bpm: 95, duration_seconds: 60, audio_url: 'https://cdn.kiranbeats.com/audio/kb_02.mp3' }
+    ]
+  });
+});`;
+                        navigator.clipboard.writeText(snippet);
+                        setCopiedSpec(true);
+                        setTimeout(() => setCopiedSpec(false), 3000);
+                      }}
+                      className="w-full py-2 px-3 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/10 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      {copiedSpec ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Copied Express Spec to Clipboard!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Copy Sample Backend Code</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Synced Audio Tracks Catalog */}
+          <div className="p-6 rounded-3xl bg-[#121622] border border-white/10 space-y-4 shadow-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-white/5">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <Disc className="w-4 h-4 text-cyan-400" />
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                    Synced Kiran Beats Catalog
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Audio tracks synced from Kiran Beats and ready to synchronize with video frames in the Template Maker and Music Video Planner.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-400 font-mono">
+                  {beatsTracks.length} beats synced
+                </span>
+                <button
+                  type="button"
+                  onClick={handleSyncBeatsData}
+                  disabled={isSyncingBeatsData}
+                  className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/10 text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                  title="Refresh tracks catalog"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingBeatsData ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            {beatsTracks.length === 0 ? (
+              <div className="p-10 rounded-2xl bg-[#0e111a] border border-dashed border-white/10 text-center space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-amber-500/10 text-amber-400 mx-auto flex items-center justify-center">
+                  <Music className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold text-white">No Audio Beats Synced Yet</h4>
+                  <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                    Once you save your Kiran Beats API Key and click <strong className="text-cyan-300">Sync Available Data</strong>, your music catalog will appear here and be accessible across all AI video tools.
+                  </p>
+                </div>
+                <div className="flex items-center justify-center gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleSyncBeatsData}
+                    disabled={isSyncingBeatsData || !beatsConfig?.configured}
+                    className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-white text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    Sync Now
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowSpecGuide(true)}
+                    className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    View Backend Requirements
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {beatsTracks.map((track) => (
+                  <div
+                    key={track.id}
+                    className="p-4 rounded-2xl bg-[#0e111a] border border-white/5 hover:border-amber-500/30 transition-all space-y-3 group"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-0.5">
+                        <div className="text-xs font-bold text-white group-hover:text-amber-300 transition-colors">
+                          {track.title}
+                        </div>
+                        <div className="text-[11px] text-slate-400 font-mono flex items-center gap-2">
+                          {track.genre && <span className="text-cyan-400">{track.genre}</span>}
+                          {track.bpm && <span>{track.bpm} BPM</span>}
+                          {track.duration_seconds && <span>{track.duration_seconds}s</span>}
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (activeAudioPlaying === track.id) {
+                            setActiveAudioPlaying(null);
+                          } else {
+                            setActiveAudioPlaying(track.id);
+                          }
+                        }}
+                        className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
+                          activeAudioPlaying === track.id
+                            ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/30'
+                            : 'bg-white/5 hover:bg-white/10 text-white'
+                        }`}
+                        title={activeAudioPlaying === track.id ? 'Pause' : 'Play Preview'}
+                      >
+                        {activeAudioPlaying === track.id ? (
+                          <Pause className="w-3.5 h-3.5" />
+                        ) : (
+                          <Play className="w-3.5 h-3.5 ml-0.5" />
+                        )}
+                      </button>
+                    </div>
+
+                    {activeAudioPlaying === track.id && (
+                      <div className="space-y-1.5 pt-1">
+                        <audio
+                          src={track.preview_url || track.audio_url}
+                          controls
+                          autoPlay
+                          onEnded={() => setActiveAudioPlaying(null)}
+                          className="w-full h-8"
+                        />
+                        <div className="text-[10px] text-slate-500 font-mono truncate">
+                          Source: {track.audio_url}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between pt-1 border-t border-white/5 text-[10px] text-slate-500 font-mono">
+                      <span>ID: {track.id.slice(0, 10)}...</span>
+                      <span>Synced: {new Date(track.synced_at).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
